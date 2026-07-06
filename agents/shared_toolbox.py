@@ -89,14 +89,26 @@ class Toolbox:
         self.agent = agent
         self.session = requests.Session()
         self.session.headers["User-Agent"] = "Mozilla/5.0 (oracle-duel research bot)"
+        self.stats = {}  # {tool: {"ok": n, "err": n}} — research-health telemetry
+
+    def _count(self, name: str, ok: bool):
+        c = self.stats.setdefault(name, {"ok": 0, "err": 0})
+        c["ok" if ok else "err"] += 1
+
+    def take_stats(self) -> dict:
+        stats, self.stats = self.stats, {}
+        return stats
 
     def dispatch(self, name: str, args: dict) -> str:
         try:
             fn = getattr(self, f"_tool_{name}", None)
             if fn is None:
                 return f"error: unknown tool {name}"
-            return fn(**args)
+            out = fn(**args)
+            self._count(name, ok=not out.startswith(("tool error", "error:", "no results")))
+            return out
         except Exception as e:
+            self._count(name, ok=False)
             return f"tool error: {e}"
 
     def _tool_web_search(self, query: str) -> str:

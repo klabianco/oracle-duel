@@ -70,6 +70,14 @@ CREATE TABLE IF NOT EXISTS token_spend (
     output_tokens INTEGER,
     dollars REAL
 );
+CREATE TABLE IF NOT EXISTS tool_health (
+    id INTEGER PRIMARY KEY,
+    agent TEXT NOT NULL,
+    date TEXT NOT NULL,
+    tool TEXT NOT NULL,
+    ok INTEGER NOT NULL,
+    err INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS incidents (
     id INTEGER PRIMARY KEY,
     ts TEXT NOT NULL,
@@ -304,6 +312,21 @@ class Telemetry:
         return self.conn.execute(
             "SELECT COALESCE(SUM(dollars),0) FROM token_spend WHERE agent=?", (agent,)
         ).fetchone()[0]
+
+    def record_tool_health(self, agent: str, date: str, stats: dict):
+        """stats: {tool_name: {'ok': n, 'err': n}}"""
+        for tool, c in stats.items():
+            self.conn.execute(
+                "INSERT INTO tool_health(agent, date, tool, ok, err) VALUES (?,?,?,?,?)",
+                (agent, date, tool, c.get("ok", 0), c.get("err", 0)),
+            )
+        self.conn.commit()
+
+    def tool_health_on(self, agent: str, date: str) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT tool, SUM(ok) ok, SUM(err) err FROM tool_health "
+            "WHERE agent=? AND date=? GROUP BY tool", (agent, date)).fetchall()
+        return [dict(r) for r in rows]
 
     def incident(self, kind: str, agent: str = None, detail=None):
         if not isinstance(detail, str):

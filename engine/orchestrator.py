@@ -194,8 +194,15 @@ def cycle(cfg):
         st = telemetry.agent_state(name)
         n_forecasts = len(all_forecasts.get(name, []))
         spend = telemetry.spend_on(name, date)
+        health = telemetry.tool_health_on(name, date)
+        hs = " ".join(f"{h['tool']} {h['ok']}/{h['ok']+h['err']}" for h in health) or "no tool calls"
         lines.append(f"[{name}] bankroll ${st['bankroll']:.2f}, {n_forecasts} forecasts, "
-                     f"spend ${spend:.2f}")
+                     f"spend ${spend:.2f} | research: {hs}")
+        for h in health:
+            total = h["ok"] + h["err"]
+            if h["tool"] == "web_search" and total >= 5 and h["err"] / total > 0.5:
+                alerts.send(f"[{name}] RESEARCH DEGRADED: web_search failing "
+                            f"{h['err']}/{total} — agents are forecasting blind")
     alerts.send("\n".join(lines), title="oracle-duel daily digest")
     generate_dashboard(telemetry, cfg)
     print("\n".join(lines))

@@ -178,4 +178,5 @@ class AgentRunner:
                 "cycle_date", "agent", "prompt_version", "market_id", "market_title",
                 "category", "prob", "market_price", "edge_net", "confidence_notes")})
             forecasts.append(f)
+        self.telemetry.record_tool_health(self.name, date, self.toolbox.take_stats())
         return forecasts
