@@ -16,6 +16,9 @@ class AdapterError(Exception):
 
 
 class BaseAdapter:
+    cache_read_mult = 0.1    # cached input billed at 10% of input price (both providers)
+    cache_write_mult = 1.25  # anthropic cache-write premium; openai has none
+
     def __init__(self, model: str, prices: dict):
         self.model = model
         p = prices.get(model, {"input": 0.0, "output": 0.0})
@@ -23,14 +26,22 @@ class BaseAdapter:
         self.price_out = p["output"] / 1e6
         self._in = 0
         self._out = 0
+        self._cache_read = 0
+        self._cache_write = 0
 
-    def _track(self, input_tokens: int, output_tokens: int):
+    def _track(self, input_tokens: int, output_tokens: int,
+               cache_read: int = 0, cache_write: int = 0):
         self._in += input_tokens
         self._out += output_tokens
+        self._cache_read += cache_read
+        self._cache_write += cache_write
 
     def take_usage(self):
-        usage = (self._in, self._out, self._in * self.price_in + self._out * self.price_out)
-        self._in = self._out = 0
+        dollars = (self._in * self.price_in + self._out * self.price_out
+                   + self._cache_read * self.price_in * self.cache_read_mult
+                   + self._cache_write * self.price_in * self.cache_write_mult)
+        usage = (self._in + self._cache_read + self._cache_write, self._out, dollars)
+        self._in = self._out = self._cache_read = self._cache_write = 0
         return usage
 
     # subclasses implement:
@@ -64,12 +75,31 @@ class AnthropicAdapter(BaseAdapter):
 
     def _create(self, **kw):
         resp = self.client.messages.create(model=self.model, **kw)
-        self._track(resp.usage.input_tokens, resp.usage.output_tokens)
+        u = resp.usage
+        self._track(u.input_tokens, u.output_tokens,
+                    getattr(u, "cache_read_input_tokens", 0) or 0,
+                    getattr(u, "cache_creation_input_tokens", 0) or 0)
         return resp
 
     @staticmethod
     def _text(resp) -> str:
         return "".join(b.text for b in resp.content if b.type == "text")
+
+    @staticmethod
+    def _move_cache_marker(messages: list, results: list):
+        """Keep exactly one cache breakpoint, on the newest tool results.
+
+        The API allows max 4 breakpoints per request; a marker that walks forward
+        each iteration lets later loop rounds re-read the whole earlier
+        conversation at the 10% cached rate.
+        """
+        for msg in messages:
+            if msg["role"] == "user" and isinstance(msg.get("content"), list):
+                for block in msg["content"]:
+                    if isinstance(block, dict):
+                        block.pop("cache_control", None)
+        if results:
+            results[-1]["cache_control"] = {"type": "ephemeral"}
 
     def complete(self, system, user, json_schema=None, max_tokens=8000):
         kw = dict(
@@ -108,6 +138,7 @@ class AnthropicAdapter(BaseAdapter):
                     calls += 1
                 results.append({"type": "tool_result", "tool_use_id": block.id,
                                 "content": str(out)[:8000]})
+            self._move_cache_marker(messages, results)
             messages.append({"role": "user", "content": results})
         return self._text(resp)
 
@@ -118,10 +149,14 @@ class OpenAIAdapter(BaseAdapter):
         import openai
         self.client = openai.OpenAI()
 
+    cache_write_mult = 0.0  # openai auto-caches with no write premium
+
     def _create(self, **kw):
         resp = self.client.chat.completions.create(model=self.model, **kw)
         u = resp.usage
-        self._track(u.prompt_tokens, u.completion_tokens)
+        details = getattr(u, "prompt_tokens_details", None)
+        cached = (getattr(details, "cached_tokens", 0) or 0) if details else 0
+        self._track(u.prompt_tokens - cached, u.completion_tokens, cache_read=cached)
         return resp
 
     def complete(self, system, user, json_schema=None, max_tokens=8000):
