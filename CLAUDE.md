@@ -28,6 +28,9 @@ prompt self-evolution improve calibration round over round.
 
 - **Phase 0 — mock**: `ORACLE_MOCK=1`, fake exchange + fake LLMs. Done (2026-07-05).
 - **Phase 0.5 — paper**: real markets, real LLMs, orders logged not placed. Current.
+  NOTE 2026-07-06: claude agent switched opus-4-8 → sonnet-5 (owner call, cost;
+  published parity on agentic search). Claude telemetry reset that day for clean
+  attribution; gpt history kept. Sonnet-5 intro pricing in config expires 2026-08-31.
 - **Phase 1 — live, minimum stakes**: 1-contract positions, prompt v1, one round.
 - **Phase 2 — full spec**: risk-engine sizing, evolution loop, auto-revert armed.
 - **Phase 3 — write-up**: after 6–8 rounds, export mutation history, calibration
