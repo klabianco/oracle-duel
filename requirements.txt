@@ -1,0 +1,6 @@
+requests>=2.31
+PyYAML>=6.0
+cryptography>=42.0
+anthropic>=0.90
+openai>=1.60
+pytest>=8.0

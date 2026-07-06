@@ -1,0 +1,51 @@
+# Oracle Duel configuration.
+# NOTE: risk rules are NOT here. They live hard-coded in engine/risk.py (immutable layer).
+
+live: false        # false = paper mode: orders logged, never submitted
+mock: false        # true = mock Kalshi + mock LLMs, for pipeline testing with zero spend
+
+agents:
+  claude:
+    provider: anthropic
+    model: claude-opus-4-8
+    prompt_path: agents/claude/prompt.md
+  gpt:
+    provider: openai
+    model: gpt-5.5
+    prompt_path: agents/gpt/prompt.md
+
+bankroll_start: 100.0
+
+scanner:
+  max_horizon_days: 14
+  min_horizon_hours: 6
+  min_volume: 500
+  target_markets: 25
+  exclude_title_patterns: ["mention", "tweet", "say ", "says ", "post about"]
+
+research:
+  max_tool_calls_per_market: 4
+  max_output_tokens: 4000
+
+estimate:
+  max_output_tokens: 8000
+
+costs:
+  # USD per 1M tokens, used by the token-spend tracker
+  prices:
+    claude-opus-4-8: {input: 5.00, output: 25.00}
+    claude-fable-5: {input: 10.00, output: 50.00}
+    claude-sonnet-5: {input: 3.00, output: 15.00}
+    claude-haiku-4-5: {input: 1.00, output: 5.00}
+    gpt-5.5: {input: 5.00, output: 20.00}
+    mock: {input: 0.0, output: 0.0}
+  daily_alert_usd: 10.0
+  daily_hard_stop_usd: 15.0
+
+round:
+  min_days: 7
+  min_resolved_forecasts: 100
+  prompt_word_cap: 500
+
+alerts:
+  ntfy_topic_env: NTFY_TOPIC
