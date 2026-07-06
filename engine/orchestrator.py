@@ -105,6 +105,83 @@ def scoreboard(telemetry, cfg) -> str | None:
     return "\n".join(lines)
 
 
+def plain_digest(telemetry, cfg, date, n_markets, all_forecasts) -> str:
+    """The daily message, written for a human glancing at a phone — plain words only."""
+    live = cfg.get("live") and not cfg.get("mock")
+    bet_word = "real bet" if live else "pretend bet"
+    out = [f"Oracle Duel — {date} ({'REAL money' if live else 'pretend money'})", "",
+           f"The robots studied {n_markets} markets today.", ""]
+
+    for name in cfg["agents"]:
+        st = telemetry.agent_state(name)
+        trades = [dict(r) for r in telemetry.conn.execute(
+            "SELECT * FROM trades WHERE agent=? AND cycle_date=? AND status!='rejected'",
+            (name, date))]
+        out.append(name.upper())
+        out.append(f"- Made {len(all_forecasts.get(name, []))} guesses today.")
+        if trades:
+            out.append(f"- Placed {len(trades)} {bet_word}{'s' if len(trades) > 1 else ''}:")
+            for t in trades:
+                cost = t["contracts"] * t["price"] + t["fees"]
+                row = telemetry.conn.execute(
+                    "SELECT market_title FROM forecasts WHERE market_id=? AND agent=? "
+                    "ORDER BY id DESC", (t["market_id"], name)).fetchone()
+                title = row["market_title"] if row else t["market_id"]
+                out.append(f'  * ${cost:.2f} says {t["side"].upper()} on "{title[:70]}"')
+        else:
+            out.append("- Placed no bets. No idea was strong enough to beat the fees.")
+        if st["halted"]:
+            out.append("- PAUSED: this robot lost too much and needs your OK to bet again.")
+        out.append(f"- Money: ${st['bankroll']:.2f} (started with ${cfg['bankroll_start']:.0f})")
+        out.append(f"- Thinking cost today: ${telemetry.spend_on(name, date):.2f}")
+        out.append("")
+
+    resolved_today = telemetry.conn.execute(
+        "SELECT agent, prob, outcome FROM forecasts "
+        "WHERE resolved=1 AND substr(resolved_at,1,10)=?", (date,)).fetchall()
+    if resolved_today:
+        out.append("SCOREKEEPING")
+        out.append(f"- {len(resolved_today) // max(len(cfg['agents']), 1)} old guesses "
+                   "got their answers today.")
+        for name in cfg["agents"]:
+            mine = [r for r in resolved_today if r["agent"] == name]
+            right = sum(1 for r in mine
+                        if (r["outcome"] == 1) == (r["prob"] > 0.5))
+            if mine:
+                out.append(f"- {name} called {right} of {len(mine)} right.")
+        out.append("")
+
+    out.append("THE BIG QUESTION: can they beat the market?")
+    for name in cfg["agents"]:
+        pb = gates.paired_brier(telemetry, name)
+        n = pb["n"]
+        if n < gates.MIN_N:
+            todays = sum(1 for r in resolved_today if r["agent"] == name)
+            if todays:
+                days_left = (gates.MIN_N - n) / todays
+                eta = f" We should know around {_eta_date(date, days_left)}."
+            else:
+                eta = ""
+            out.append(f"- {name}: too early to tell ({n} of {gates.MIN_N} answers in).{eta}")
+        else:
+            v = gates.verdict(pb, gates.realized_claim_edge(telemetry, name))
+            if v.startswith("GO"):
+                out.append(f"- {name}: YES — it is beating the market. "
+                           "Time to talk about real money.")
+            elif v.startswith(("KILL", "HARD STOP")):
+                out.append(f"- {name}: NO — it is not beating the market. "
+                           "Probably time to stop.")
+            else:
+                out.append(f"- {name}: too close to call ({n} of "
+                           f"{gates.HARD_STOP_N} answers in).")
+    return "\n".join(out)
+
+
+def _eta_date(date: str, days_left: float) -> str:
+    from datetime import date as d, timedelta
+    return (d.fromisoformat(date) + timedelta(days=round(days_left))).strftime("%b %d")
+
+
 def cycle(cfg):
     telemetry = Telemetry(DB_PATH)
     alerts = Alerts(cfg)
@@ -208,9 +285,11 @@ def cycle(cfg):
         if pb["mean"] is not None:
             lines.append(f"[{name}] gate: Δbrier vs market {pb['mean']:+.4f} "
                          f"[{pb['lo']:+.4f}, {pb['hi']:+.4f}] n={pb['n']}")
-    alerts.send("\n".join(lines), title="oracle-duel daily digest")
-    generate_dashboard(telemetry, cfg)
+    # technical digest -> log/stdout; plain-language digest -> the push notification
     print("\n".join(lines))
+    digest = plain_digest(telemetry, cfg, date, len(markets), all_forecasts)
+    alerts.send(digest, title="oracle-duel daily digest")
+    generate_dashboard(telemetry, cfg)
 
 
 def status(cfg):
