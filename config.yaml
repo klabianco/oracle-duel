@@ -39,7 +39,7 @@ costs:
     claude-fable-5: {input: 10.00, output: 50.00}
     claude-sonnet-5: {input: 3.00, output: 15.00}
     claude-haiku-4-5: {input: 1.00, output: 5.00}
-    gpt-5.5: {input: 5.00, output: 20.00}
+    gpt-5.5: {input: 5.00, output: 30.00}  # verified vs OpenAI pricing page 2026-07-06
     mock: {input: 0.0, output: 0.0}
   daily_alert_usd: 10.0
   daily_hard_stop_usd: 15.0
