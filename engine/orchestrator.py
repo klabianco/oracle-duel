@@ -132,7 +132,18 @@ def plain_digest(telemetry, cfg, date, n_markets, all_forecasts) -> str:
             out.append("- Placed no bets. No idea was strong enough to beat the fees.")
         if st["halted"]:
             out.append("- PAUSED: this robot lost too much and needs your OK to bet again.")
-        out.append(f"- Money: ${st['bankroll']:.2f} (started with ${cfg['bankroll_start']:.0f})")
+        riding = telemetry.conn.execute(
+            "SELECT COALESCE(SUM(contracts*price+fees),0), COUNT(*) FROM trades "
+            "WHERE agent=? AND status='open'", (name,)).fetchone()
+        start = cfg["bankroll_start"]
+        if riding[1]:
+            out.append(f"- Money: ${st['bankroll']:.2f} in the wallet, plus "
+                       f"${riding[0]:.2f} riding on {riding[1]} open "
+                       f"bet{'s' if riding[1] > 1 else ''} (started with ${start:.0f})")
+        else:
+            total = st["bankroll"]
+            word = "up" if total > start + 0.005 else ("down" if total < start - 0.005 else "even")
+            out.append(f"- Money: ${total:.2f} — {word} vs the ${start:.0f} start")
         out.append(f"- Thinking cost today: ${telemetry.spend_on(name, date):.2f}")
         out.append("")
 
