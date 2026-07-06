@@ -62,6 +62,49 @@ def place_orders(agent: str, decision: risk.Decision, telemetry, client, cfg, da
                     f"@ {order.price:.2f} (net edge {order.edge_net:+.3f})")
 
 
+def scoreboard(telemetry, cfg) -> str | None:
+    """Head-to-head score after a round closes: latest round Brier + cumulative money.
+
+    Returns None until every agent has at least one closed round.
+    """
+    rows = []
+    for name in cfg["agents"]:
+        last = telemetry.conn.execute(
+            "SELECT version, round_brier, round_n, reverted FROM prompt_versions "
+            "WHERE agent=? AND round_brier IS NOT NULL ORDER BY version DESC LIMIT 1",
+            (name,)).fetchone()
+        if not last:
+            return None
+        spend = telemetry.total_spend(name)
+        pnl = telemetry.total_pnl(name)
+        rows.append({
+            "agent": name, "version": last["version"], "brier": last["round_brier"],
+            "n": last["round_n"], "reverted": bool(last["reverted"]),
+            "pnl": pnl, "spend": spend,
+            "ppd": (pnl / spend) if spend else None,
+        })
+
+    by_brier = sorted(rows, key=lambda r: r["brier"])
+    lead, trail = by_brier[0], by_brier[-1]
+    lines = ["=== ROUND SCOREBOARD ==="]
+    for r in rows:
+        ppd = f"{r['ppd']:+.2f}" if r["ppd"] is not None else "n/a"
+        lines.append(
+            f"[{r['agent']}] round brier {r['brier']:.4f} over {r['n']} forecasts "
+            f"(v{r['version']}{', reverted' if r['reverted'] else ''}) | "
+            f"total P&L ${r['pnl']:+.2f} | spend ${r['spend']:.2f} | P&L per $ {ppd}")
+    if abs(lead["brier"] - trail["brier"]) < 1e-9:
+        lines.append("calibration: dead even")
+    else:
+        lines.append(f"calibration lead: {lead['agent']} by "
+                     f"{trail['brier'] - lead['brier']:.4f} brier")
+    by_pnl = sorted(rows, key=lambda r: r["pnl"], reverse=True)
+    if abs(by_pnl[0]["pnl"] - by_pnl[-1]["pnl"]) > 0.005:
+        lines.append(f"money lead: {by_pnl[0]['agent']} by "
+                     f"${by_pnl[0]['pnl'] - by_pnl[-1]['pnl']:+.2f}")
+    return "\n".join(lines)
+
+
 def cycle(cfg):
     telemetry = Telemetry(DB_PATH)
     alerts = Alerts(cfg)
@@ -130,11 +173,18 @@ def cycle(cfg):
         place_orders(name, decision, telemetry, client, cfg, date, alerts)
 
     # 5) close any completed rounds (prompt evolution)
+    rounds_closed = False
     for name, runner in runners.items():
         if postmortem.round_complete(telemetry, name, cfg, now=_now(client)):
             result = postmortem.run_postmortem(runner, telemetry, cfg, alerts,
                                                now=_now(client))
             telemetry.incident("round_closed", name, result)
+            rounds_closed = True
+    if rounds_closed:
+        sb = scoreboard(telemetry, cfg)
+        if sb:
+            alerts.send(sb, title="oracle-duel round scoreboard")
+            print(sb)
 
     # 6) digest
     lines = [f"cycle {date}: {len(markets)} markets scanned, "
@@ -187,14 +237,21 @@ def main():
         telemetry = Telemetry(DB_PATH)
         alerts = Alerts(cfg)
         client = make_client(cfg)
+        closed = False
         for name, agent_cfg in cfg["agents"].items():
             runner = AgentRunner(name, agent_cfg, cfg, telemetry)
             runner.load_prompt()
             if postmortem.round_complete(telemetry, name, cfg, now=_now(client)):
                 print(postmortem.run_postmortem(runner, telemetry, cfg, alerts,
                                                 now=_now(client)))
+                closed = True
             else:
                 print(f"{name}: round not complete yet")
+        if closed:
+            sb = scoreboard(telemetry, cfg)
+            if sb:
+                alerts.send(sb, title="oracle-duel round scoreboard")
+                print(sb)
     elif args.command == "fast-forward":
         if not cfg.get("mock"):
             sys.exit("fast-forward only works in mock mode")
