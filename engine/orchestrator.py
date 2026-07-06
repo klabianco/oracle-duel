@@ -213,6 +213,9 @@ def cycle(cfg):
         alerts.send("scanner found no eligible markets — cycle ends")
         return
 
+    alerts.send(f"Good morning — the robots are starting work on {len(markets)} markets. "
+                "Results in an hour or two.", title="oracle-duel: cycle started")
+
     agent_names = list(cfg["agents"].keys())
     for name in agent_names:
         telemetry.ensure_agent(name, cfg["bankroll_start"])

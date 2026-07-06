@@ -7,3 +7,4 @@ state/mock_state.json
 state/dashboard.html
 logs/
 .pytest_cache/
+state/.last_cycle
