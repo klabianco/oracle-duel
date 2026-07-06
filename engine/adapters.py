@@ -86,19 +86,19 @@ class AnthropicAdapter(BaseAdapter):
         return "".join(b.text for b in resp.content if b.type == "text")
 
     @staticmethod
-    def _move_cache_marker(messages: list, results: list):
-        """Keep exactly one cache breakpoint, on the newest tool results.
+    def _add_cache_marker(messages: list, results: list):
+        """Add a cache breakpoint on the newest tool results, KEEPING earlier ones.
 
-        The API allows max 4 breakpoints per request; a marker that walks forward
-        each iteration lets later loop rounds re-read the whole earlier
-        conversation at the 10% cached rate.
+        Empirically (2026-07-06): removing or moving an earlier marker breaks the
+        prefix match and the cache never gets read. Markers must accumulate; the
+        API allows at most 4 per request, so stop adding once that's reached.
         """
+        existing = 0
         for msg in messages:
             if msg["role"] == "user" and isinstance(msg.get("content"), list):
-                for block in msg["content"]:
-                    if isinstance(block, dict):
-                        block.pop("cache_control", None)
-        if results:
+                existing += sum(1 for b in msg["content"]
+                                if isinstance(b, dict) and "cache_control" in b)
+        if results and existing < 4:
             results[-1]["cache_control"] = {"type": "ephemeral"}
 
     def complete(self, system, user, json_schema=None, max_tokens=8000):
@@ -138,7 +138,7 @@ class AnthropicAdapter(BaseAdapter):
                     calls += 1
                 results.append({"type": "tool_result", "tool_use_id": block.id,
                                 "content": str(out)[:8000]})
-            self._move_cache_marker(messages, results)
+            self._add_cache_marker(messages, results)
             messages.append({"role": "user", "content": results})
         return self._text(resp)
 
