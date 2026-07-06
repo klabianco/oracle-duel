@@ -50,6 +50,20 @@ over {brier_all[1]} resolved forecasts</p>
 <h3>Brier by category</h3>{_table(cats, ['category', 'n', 'brier', 'avg_prob', 'hit_rate'])}
 """)
 
+    pm_html = ""
+    pms = [dict(r) for r in telemetry.conn.execute(
+        "SELECT agent, version, text, proposed_change, accepted, created_at "
+        "FROM postmortems ORDER BY id DESC LIMIT 10")]
+    for p in pms:
+        status = "accepted" if p["accepted"] else "rejected"
+        pm_html += (f"<h4>{p['agent']} · after v{p['version']} · {status} · "
+                    f"{p['created_at'][:10]}</h4>"
+                    f"<p><b>change:</b> {(p['proposed_change'] or '')[:300]}</p>"
+                    f"<blockquote style='white-space:pre-wrap'>"
+                    f"{(p['text'] or '')[:2000]}</blockquote>")
+    if pm_html:
+        pm_html = "<h2>Post-mortems (what the agents said about their own failures)</h2>" + pm_html
+
     incidents = [dict(r) for r in telemetry.conn.execute(
         "SELECT ts, kind, agent, detail FROM incidents ORDER BY id DESC LIMIT 20")]
     html = f"""<!doctype html><meta charset="utf-8"><title>Oracle Duel</title>
@@ -60,6 +74,7 @@ td,th{{border:1px solid #ccc;padding:.25rem .6rem;font-size:.9rem;text-align:lef
 <p>generated {datetime.now(timezone.utc).isoformat()} ·
 mode: {'LIVE' if cfg.get('live') else 'PAPER'}{' (mock)' if cfg.get('mock') else ''}</p>
 {''.join(sections)}
+{pm_html}
 <h2>Recent incidents</h2>{_table(incidents, ['ts', 'kind', 'agent', 'detail'])}
 """
     out = STATE_DIR / "dashboard.html"

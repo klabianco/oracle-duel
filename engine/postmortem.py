@@ -118,8 +118,12 @@ def run_postmortem(runner, telemetry, cfg: dict, alerts=None, now: datetime = No
             _commit_prompt(runner, new_version,
                            f"{agent} v{new_version}: auto-revert of failed mutation v{version}")
             if alerts:
-                alerts.send(f"[{agent}] auto-reverted prompt v{version} "
-                            f"(brier {brier:.4f} > {prev['round_brier']:.4f})")
+                alerts.send(
+                    f"{agent} — round over. Its last prompt change made it WORSE "
+                    f"(score {brier:.4f} vs {prev['round_brier']:.4f} before), so the "
+                    f"change was thrown away and the old prompt is back. "
+                    f"That's the safety net working, not a failure.",
+                    title=f"what {agent} learned")
             return {"agent": agent, "action": "reverted", "version": new_version,
                     "brier": brier}
 
@@ -162,8 +166,15 @@ def run_postmortem(runner, telemetry, cfg: dict, alerts=None, now: datetime = No
         _commit_prompt(runner, new_version,
                        f"{agent} v{new_version}: {out['change_description'][:100]}")
         if alerts:
-            alerts.send(f"[{agent}] deployed prompt v{new_version}: "
-                        f"{out['change_description'][:150]}")
+            new_wc = word_count(out["new_prompt"])
+            old_wc = word_count(old_prompt)
+            alerts.send(
+                f"{agent} — round over (score {brier:.4f} across {n} answered guesses).\n\n"
+                f"WHAT IT SAYS WENT WRONG:\n{out['postmortem'][:900]}\n\n"
+                f"THE ONE CHANGE IT MADE:\n{out['change_description'][:300]}\n\n"
+                f"Its rulebook is now {new_wc} words (was {old_wc}, limit 500). "
+                f"If this change makes it worse next round, it gets undone automatically.",
+                title=f"what {agent} learned")
         return {"agent": agent, "action": "mutated", "version": new_version, "brier": brier}
 
     telemetry.record_postmortem(agent, version, (out or {}).get("postmortem", ""),
