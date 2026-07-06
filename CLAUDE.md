@@ -76,6 +76,21 @@ Guardrails:
 - If a calibrated estimate diverges from the raw estimate by more than 20 points,
   flag it in the daily digest — that's either a big win or a bug.
 
+## Pre-registered go/no-go rule (locked 2026-07-05 — do NOT tune after data arrives)
+
+Defined in `engine/gates.py`; reported by `orchestrator gate`, the daily digest, and
+round scoreboards. Metrics: (1) paired Δbrier vs the market mid-price at forecast
+time, (2) realized edge on forecasts claiming ≥3¢ net edge.
+
+- **KILL**: n ≥ 300 resolved, 95% CI upper bound of Δbrier < +0.005, no positive
+  claim-edge signal. (An edge under 0.005 Brier cannot pay Kalshi fees.)
+- **GO**: Δbrier CI excludes zero in the agent's favor, OR realized claim edge > 5¢
+  with one-sided 95% confidence over ≥100 resolved claims.
+- **HARD STOP**: still ambiguous at 600 resolved → default KILL.
+
+Changing these thresholds after launch invalidates the experiment. Any change
+requires the owner's explicit sign-off and a note here with the date and reason.
+
 ## Commands
 
 ```bash

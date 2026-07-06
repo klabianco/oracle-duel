@@ -12,7 +12,7 @@ import argparse
 import sys
 from datetime import datetime, timezone
 
-from engine import postmortem, risk, scanner, scorer
+from engine import gates, postmortem, risk, scanner, scorer
 from engine.agent_runner import AgentRunner
 from engine.alerts import Alerts
 from engine.config import DB_PATH, STATE_DIR, load_config, stop_flag_set
@@ -183,6 +183,7 @@ def cycle(cfg):
     if rounds_closed:
         sb = scoreboard(telemetry, cfg)
         if sb:
+            sb += "\n" + gates.report(telemetry, cfg)
             alerts.send(sb, title="oracle-duel round scoreboard")
             print(sb)
 
@@ -203,6 +204,10 @@ def cycle(cfg):
             if h["tool"] == "web_search" and total >= 5 and h["err"] / total > 0.5:
                 alerts.send(f"[{name}] RESEARCH DEGRADED: web_search failing "
                             f"{h['err']}/{total} — agents are forecasting blind")
+        pb = gates.paired_brier(telemetry, name)
+        if pb["mean"] is not None:
+            lines.append(f"[{name}] gate: Δbrier vs market {pb['mean']:+.4f} "
+                         f"[{pb['lo']:+.4f}, {pb['hi']:+.4f}] n={pb['n']}")
     alerts.send("\n".join(lines), title="oracle-duel daily digest")
     generate_dashboard(telemetry, cfg)
     print("\n".join(lines))
@@ -228,7 +233,7 @@ def status(cfg):
 def main():
     ap = argparse.ArgumentParser(prog="orchestrator")
     ap.add_argument("command", choices=["cycle", "postmortem", "status", "dashboard",
-                                        "fast-forward"])
+                                        "gate", "fast-forward"])
     ap.add_argument("days", nargs="?", type=int, default=1)
     ap.add_argument("--config", default=None)
     args = ap.parse_args()
@@ -240,6 +245,8 @@ def main():
         status(cfg)
     elif args.command == "dashboard":
         print(generate_dashboard(Telemetry(DB_PATH), cfg))
+    elif args.command == "gate":
+        print(gates.report(Telemetry(DB_PATH), cfg))
     elif args.command == "postmortem":
         telemetry = Telemetry(DB_PATH)
         alerts = Alerts(cfg)

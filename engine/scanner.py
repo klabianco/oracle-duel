@@ -19,8 +19,19 @@ def scan(client, cfg: dict, now: datetime = None) -> list[dict]:
 
     exclude_cats = [c.lower() for c in sc.get("exclude_categories", [])]
 
-    markets = client.get_markets(max_close_ts=int(max_close.timestamp()),
-                                 min_volume=sc["min_volume"])
+    # two-pass fetch: the near window first so fast-resolving markets can't be
+    # crowded out of the fetch cap by far-dated listings, then the full window
+    near_close = now + timedelta(days=min(7, sc["max_horizon_days"]))
+    near = client.get_markets(max_close_ts=int(near_close.timestamp()),
+                              min_volume=sc["min_volume"])
+    far = client.get_markets(max_close_ts=int(max_close.timestamp()),
+                             min_volume=sc["min_volume"])
+    seen_ids = set()
+    markets = []
+    for m in near + far:
+        if m["market_id"] not in seen_ids:
+            seen_ids.add(m["market_id"])
+            markets.append(m)
     picked = []
     for m in markets:
         if not m.get("close_time") or m.get("yes_ask") is None or m.get("yes_bid") is None:
@@ -39,7 +50,9 @@ def scan(client, cfg: dict, now: datetime = None) -> list[dict]:
             continue  # near-certain markets carry no learning signal
         picked.append(m)
 
-    picked.sort(key=lambda m: m.get("volume", 0), reverse=True)
+    # sort for speed-to-verdict: soonest-resolving day first, most liquid within a day
+    picked.sort(key=lambda m: (_parse_ts(m["close_time"]).date().toordinal(),
+                               -m.get("volume", 0)))
     picked = picked[: sc["target_markets"] * 4]  # headroom for category/event dedup below
 
     # category lives on the event object in the current API; enrich the survivors only

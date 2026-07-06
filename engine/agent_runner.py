@@ -167,7 +167,10 @@ class AgentRunner:
                 "market_title": market["title"],
                 "category": market["category"],
                 "prob": est["prob"],
-                "market_price": market["yes_ask"],
+                # mid price = the market's own forecast; the fair benchmark for the
+                # paired brier gate metric (ask alone would bias the comparison)
+                "market_price": round(((market["yes_bid"] or market["yes_ask"]) +
+                                       market["yes_ask"]) / 2, 3),
                 "edge_net": round(max(yes_edge, no_edge), 4),
                 "confidence_notes": est["confidence_notes"],
                 # carried for the risk engine, not persisted:
