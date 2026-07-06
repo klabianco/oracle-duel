@@ -22,6 +22,8 @@ scanner:
   min_volume: 500
   target_markets: 25
   exclude_title_patterns: ["mention", "tweet", "say ", "says ", "post about"]
+  exclude_categories: ["exotics", "mentions", "social"]
+  max_per_event: 2
 
 research:
   max_tool_calls_per_market: 4

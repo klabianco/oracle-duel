@@ -26,6 +26,13 @@ def _cents_to_dollars(v):
     return None if v is None else round(v / 100.0, 2)
 
 
+def _dollars(v):
+    """Parse the current API's dollar-string fields ('0.5500' -> 0.55)."""
+    if v in (None, ""):
+        return None
+    return round(float(v), 4)
+
+
 class KalshiClient:
     def __init__(self, key_id: str = None, private_key_path: str = None):
         from cryptography.hazmat.primitives import serialization
@@ -89,7 +96,8 @@ class KalshiClient:
         except Exception:
             return False
 
-    def get_markets(self, max_close_ts: int = None, limit: int = 800) -> list[dict]:
+    def get_markets(self, max_close_ts: int = None, limit: int = 1000,
+                    min_volume: int = None) -> list[dict]:
         out, cursor = [], None
         while len(out) < limit:
             params = {"status": "open", "limit": 200}
@@ -97,6 +105,8 @@ class KalshiClient:
                 params["cursor"] = cursor
             if max_close_ts:
                 params["max_close_ts"] = max_close_ts
+            if min_volume:
+                params["min_volume"] = str(min_volume)
             data = self._request("GET", "/markets", params=params)
             for m in data.get("markets", []):
                 out.append(self._normalize(m))
@@ -109,17 +119,34 @@ class KalshiClient:
         data = self._request("GET", f"/markets/{ticker}")
         return self._normalize(data["market"])
 
+    def get_event_category(self, event_ticker: str) -> str:
+        if not hasattr(self, "_event_cache"):
+            self._event_cache = {}
+        if event_ticker not in self._event_cache:
+            data = self._request("GET", f"/events/{event_ticker}")
+            self._event_cache[event_ticker] = (
+                data.get("event", {}).get("category") or "uncategorized").lower()
+        return self._event_cache[event_ticker]
+
     def get_orderbook(self, ticker: str, depth: int = 10) -> dict:
         data = self._request("GET", f"/markets/{ticker}/orderbook", params={"depth": depth})
+        # Current API: {"orderbook_fp": {"yes_dollars": [[price, qty],...], "no_dollars": [...]}}
+        # Legacy:      {"orderbook":    {"yes": [[price_cents, qty],...],  "no": [...]}}
+        # Either way these are resting bids: a resting NO bid at q fills a YES buyer at 1-q.
+        if "orderbook_fp" in data:
+            ob = data["orderbook_fp"] or {}
+            def levels(side):
+                return [(_dollars(p), float(q)) for p, q in (ob.get(side) or [])]
+            return {"yes_bids": levels("yes_dollars"), "no_bids": levels("no_dollars")}
         ob = data.get("orderbook") or {}
-        # Kalshi returns resting bids: {"yes": [[price_cents, qty],...], "no": [...]}
-        # A resting NO bid at price q is liquidity for a YES buyer at price 1-q, and vice versa.
-        def levels(side):
-            return [( _cents_to_dollars(p), q) for p, q in (ob.get(side) or [])]
-        return {"yes_bids": levels("yes"), "no_bids": levels("no")}
+        def levels_cents(side):
+            return [(_cents_to_dollars(p), q) for p, q in (ob.get(side) or [])]
+        return {"yes_bids": levels_cents("yes"), "no_bids": levels_cents("no")}
 
     def get_balance(self) -> float:
         data = self._request("GET", "/portfolio/balance")
+        if "balance_dollars" in data:
+            return float(data["balance_dollars"])
         return data.get("balance", 0) / 100.0
 
     def create_order(self, ticker: str, side: str, count: int, price: float,
@@ -137,17 +164,25 @@ class KalshiClient:
 
     @staticmethod
     def _normalize(m: dict) -> dict:
+        if "yes_bid_dollars" in m:  # current API: dollar-string fields
+            price = {k: _dollars(m.get(f"{k}_dollars")) for k in
+                     ("yes_bid", "yes_ask", "no_bid", "no_ask", "last_price")}
+            volume = float(m.get("volume_fp") or 0)
+            open_interest = float(m.get("open_interest_fp") or 0)
+        else:  # legacy: integer cents
+            price = {k: _cents_to_dollars(m.get(k)) for k in
+                     ("yes_bid", "yes_ask", "no_bid", "no_ask", "last_price")}
+            volume = m.get("volume") or 0
+            open_interest = m.get("open_interest") or 0
         return {
             "market_id": m.get("ticker"),
-            "title": m.get("title") or m.get("subtitle") or m.get("ticker"),
-            "category": (m.get("category") or "uncategorized").lower(),
-            "yes_bid": _cents_to_dollars(m.get("yes_bid")),
-            "yes_ask": _cents_to_dollars(m.get("yes_ask")),
-            "no_bid": _cents_to_dollars(m.get("no_bid")),
-            "no_ask": _cents_to_dollars(m.get("no_ask")),
-            "last_price": _cents_to_dollars(m.get("last_price")),
-            "volume": m.get("volume") or 0,
-            "open_interest": m.get("open_interest") or 0,
+            "event_ticker": m.get("event_ticker"),
+            "title": m.get("title") or m.get("yes_sub_title") or m.get("ticker"),
+            "category": (m.get("category") or "").lower(),  # enriched from the event
+            "mve": bool(m.get("mve_collection_ticker")),    # multi-leg parlay market
+            **price,
+            "volume": volume,
+            "open_interest": open_interest,
             "close_time": m.get("close_time"),
             "status": m.get("status"),
             "result": m.get("result"),  # 'yes' | 'no' | '' when settled
