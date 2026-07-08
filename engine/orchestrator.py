@@ -128,6 +128,8 @@ def plain_digest(telemetry, cfg, date, n_markets, all_forecasts) -> str:
                     "ORDER BY id DESC", (t["market_id"], name)).fetchone()
                 title = row["market_title"] if row else t["market_id"]
                 out.append(f'  * ${cost:.2f} says {t["side"].upper()} on "{title[:70]}"')
+        elif st["halted"]:
+            out.append("- Placed no bets — betting is paused.")
         else:
             out.append("- Placed no bets. No idea was strong enough to beat the fees.")
         if st["halted"]:
@@ -148,11 +150,14 @@ def plain_digest(telemetry, cfg, date, n_markets, all_forecasts) -> str:
         out.append("")
 
     resolved_today = telemetry.conn.execute(
-        "SELECT agent, prob, outcome FROM forecasts "
+        "SELECT agent, market_id, prob, outcome FROM forecasts "
         "WHERE resolved=1 AND substr(resolved_at,1,10)=?", (date,)).fetchall()
     if resolved_today:
         out.append("SCOREKEEPING")
-        out.append(f"- {len(resolved_today) // max(len(cfg['agents']), 1)} old guesses "
+        # count distinct markets: an agent may lack a row for a market the other
+        # forecast (e.g. after a telemetry reset), so dividing by agent count is wrong
+        n_res = len({r["market_id"] for r in resolved_today})
+        out.append(f"- {n_res} old guess{'es' if n_res != 1 else ''} "
                    "got their answers today.")
         for name in cfg["agents"]:
             mine = [r for r in resolved_today if r["agent"] == name]
