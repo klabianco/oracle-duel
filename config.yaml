@@ -25,6 +25,7 @@ scanner:
   exclude_title_patterns: ["mention", "tweet", "say ", "says ", "post about"]
   exclude_categories: ["exotics", "mentions", "social"]
   max_per_event: 2
+  max_per_category: 10   # crypto price ladders dominate fast-closing supply; keep the mix broad
 
 research:
   max_tool_calls_per_market: 4

@@ -94,6 +94,16 @@ time, (2) realized edge on forecasts claiming ≥3¢ net edge.
 Changing these thresholds after launch invalidates the experiment. Any change
 requires the owner's explicit sign-off and a note here with the date and reason.
 
+NOTE 2026-07-08 (owner-approved): sampling frame changed at n=13 — metrics and
+thresholds untouched. The scanner's wide fetch was silently returning only
+far-dated markets (the API fills its page cap from the top of the close-time
+window), so forecasts resolved at ~1-4/day and the gate ETA was months out.
+Fixed to fetch ascending close-time windows; also added max_per_category: 10
+because crypto price ladders dominate fast-closing supply and are near-random-
+walk noise that would bias Δbrier toward KILL. Consequence: the experiment now
+tests short-horizon markets (mostly ≤2 days to close); expect n=300 around
+mid-July 2026.
+
 ## Commands
 
 ```bash

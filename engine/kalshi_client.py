@@ -96,8 +96,8 @@ class KalshiClient:
         except Exception:
             return False
 
-    def get_markets(self, max_close_ts: int = None, limit: int = 1000,
-                    min_volume: int = None) -> list[dict]:
+    def get_markets(self, max_close_ts: int = None, min_close_ts: int = None,
+                    limit: int = 1000, min_volume: int = None) -> list[dict]:
         out, cursor = [], None
         while len(out) < limit:
             params = {"status": "open", "limit": 200}
@@ -105,6 +105,8 @@ class KalshiClient:
                 params["cursor"] = cursor
             if max_close_ts:
                 params["max_close_ts"] = max_close_ts
+            if min_close_ts:
+                params["min_close_ts"] = min_close_ts
             if min_volume:
                 params["min_volume"] = str(min_volume)
             data = self._request("GET", "/markets", params=params)

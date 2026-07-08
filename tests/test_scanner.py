@@ -1,0 +1,91 @@
+from datetime import datetime, timedelta, timezone
+
+from engine import scanner
+
+NOW = datetime(2026, 7, 9, 12, 0, tzinfo=timezone.utc)
+
+CFG = {"scanner": {
+    "max_horizon_days": 14,
+    "min_horizon_hours": 6,
+    "min_volume": 300,
+    "target_markets": 40,
+    "exclude_title_patterns": [],
+    "exclude_categories": [],
+    "max_per_event": 2,
+}}
+
+
+def _market(i, close, volume=1000):
+    return {
+        "market_id": f"M{i}", "event_ticker": f"EV{i}",
+        "title": f"Market {i}", "close_time": close.isoformat(),
+        "yes_ask": 0.50, "yes_bid": 0.48, "volume": volume,
+    }
+
+
+class PageCappedClient:
+    """Mimics the Kalshi API: fills a capped page from the TOP of the
+    close-time window (latest-closing first)."""
+
+    PAGE_CAP = 200
+
+    def __init__(self, markets):
+        self.markets = markets
+
+    def get_markets(self, max_close_ts=None, min_close_ts=None,
+                    limit=1000, min_volume=None):
+        ms = [m for m in self.markets
+              if (max_close_ts is None or
+                  datetime.fromisoformat(m["close_time"]).timestamp() <= max_close_ts)
+              and (min_close_ts is None or
+                   datetime.fromisoformat(m["close_time"]).timestamp() >= min_close_ts)]
+        ms.sort(key=lambda m: m["close_time"], reverse=True)
+        return ms[: self.PAGE_CAP]
+
+
+def test_fast_closing_markets_survive_the_page_cap():
+    # 500 markets closing 6-7 days out would fill any single wide fetch;
+    # the 30 closing tomorrow must still be picked (soonest-first)
+    far = [_market(i, NOW + timedelta(days=6, hours=i % 24)) for i in range(500)]
+    near = [_market(1000 + i, NOW + timedelta(hours=18)) for i in range(30)]
+    picked = scanner.scan(PageCappedClient(far + near), CFG, now=NOW)
+
+    assert len(picked) == CFG["scanner"]["target_markets"]
+    near_ids = {m["market_id"] for m in near}
+    assert near_ids <= {m["market_id"] for m in picked}
+    # soonest-closing first
+    closes = [m["close_time"] for m in picked]
+    assert closes == sorted(closes)
+
+
+def test_per_category_cap_keeps_mix_broad():
+    # crypto floods the fastest window; the cap should hold it to 10 and let
+    # slower-closing categories fill the rest of the list
+    crypto = [dict(_market(i, NOW + timedelta(hours=12 + i)), category="crypto")
+              for i in range(30)]
+    econ = [dict(_market(100 + i, NOW + timedelta(hours=30)), category="econ")
+            for i in range(20)]
+    sports = [dict(_market(200 + i, NOW + timedelta(days=4)), category="sports")
+              for i in range(20)]
+    cfg = {"scanner": {**CFG["scanner"], "max_per_category": 10}}
+    picked = scanner.scan(PageCappedClient(crypto + econ + sports), cfg, now=NOW)
+    cats = [m["category"] for m in picked]
+    # the cap is symmetric and hard: 10 per category, even if the list runs
+    # short of target_markets — a narrow day beats a crypto-flooded one
+    assert cats.count("crypto") == 10
+    assert cats.count("econ") == 10
+    assert cats.count("sports") == 10
+    assert len(picked) == 30
+    # crypto's 10 slots all come from its soonest-closing day
+    # (within a day the scanner prefers liquidity over hour-of-close, by design)
+    crypto_days = {scanner._parse_ts(m["close_time"]).date()
+                   for m in picked if m["category"] == "crypto"}
+    assert crypto_days == {(NOW + timedelta(hours=12)).date()}
+
+
+def test_horizon_bounds_still_respected():
+    inside_6h = _market(1, NOW + timedelta(hours=3))          # too soon
+    beyond_max = _market(2, NOW + timedelta(days=20))         # too far
+    ok = _market(3, NOW + timedelta(days=2))
+    picked = scanner.scan(PageCappedClient([inside_6h, beyond_max, ok]), CFG, now=NOW)
+    assert [m["market_id"] for m in picked] == ["M3"]
