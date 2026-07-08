@@ -248,6 +248,7 @@ def cycle(cfg):
             "bankroll": st["bankroll"],
             "high_water": st["high_water"],
             "day_start_bankroll": st["day_start_bankroll"],
+            "open_stake": telemetry.open_stake(name),
             "trades_today": telemetry.trades_opened_on(name, date),
             "own_positions": telemetry.positions_by_market(name),
             "other_positions": other_positions,
@@ -323,10 +324,23 @@ def status(cfg):
               f"pnl ${telemetry.total_pnl(name):.2f} spend ${telemetry.total_spend(name):.2f}")
 
 
+def resume(cfg):
+    """Clear circuit-breaker halts. This IS the 'human review' the halt asks for."""
+    telemetry = Telemetry(DB_PATH)
+    for name in cfg["agents"]:
+        st = telemetry.agent_state(name)
+        if not st or not st["halted"]:
+            print(f"{name}: not halted")
+            continue
+        telemetry.set_halted(name, False)
+        telemetry.incident("halt_cleared", name, st["halted_reason"])
+        print(f"{name}: halt cleared (was: {st['halted_reason']})")
+
+
 def main():
     ap = argparse.ArgumentParser(prog="orchestrator")
     ap.add_argument("command", choices=["cycle", "postmortem", "status", "dashboard",
-                                        "gate", "fast-forward"])
+                                        "gate", "resume", "fast-forward"])
     ap.add_argument("days", nargs="?", type=int, default=1)
     ap.add_argument("--config", default=None)
     args = ap.parse_args()
@@ -340,6 +354,8 @@ def main():
         print(generate_dashboard(Telemetry(DB_PATH), cfg))
     elif args.command == "gate":
         print(gates.report(Telemetry(DB_PATH), cfg))
+    elif args.command == "resume":
+        resume(cfg)
     elif args.command == "postmortem":
         telemetry = Telemetry(DB_PATH)
         alerts = Alerts(cfg)

@@ -100,6 +100,7 @@ requires the owner's explicit sign-off and a note here with the date and reason.
 python -m engine.orchestrator cycle        # daily (cron); reads .env
 python -m engine.orchestrator status       # one line per agent
 python -m engine.orchestrator postmortem   # close completed rounds manually
+python -m engine.orchestrator resume       # clear circuit-breaker halts (human review)
 python -m engine.orchestrator dashboard    # writes state/dashboard.html
 ORACLE_MOCK=1 ... fast-forward N           # advance mock clock
 pytest                                     # unit tests (risk, guard, scorer, postmortem)

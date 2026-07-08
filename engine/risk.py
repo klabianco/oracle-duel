@@ -95,6 +95,7 @@ def evaluate(agent: str, forecasts: list[dict], ctx: dict) -> Decision:
     ctx: {
         stop_flag: bool,
         bankroll, high_water, day_start_bankroll: float,
+        open_stake: float,   # cost basis (incl. fees) of open positions; equity = bankroll + open_stake
         trades_today: int,
         own_positions: {market_id: side},
         other_positions: {market_id: side},   # the OTHER agent's open/pending sides
@@ -108,8 +109,12 @@ def evaluate(agent: str, forecasts: list[dict], ctx: dict) -> Decision:
         return d
 
     bankroll = ctx["bankroll"]
-    if bankroll < ctx["high_water"] * (1 - RULES["circuit_breaker_drawdown"]):
-        d.halt = (f"circuit breaker: bankroll {bankroll:.2f} is >15% below "
+    # Drawdown is measured on equity (cash + capital staked on open positions),
+    # not cash alone: money riding on an open bet is at risk, not lost.
+    equity = bankroll + ctx.get("open_stake", 0.0)
+    if equity < ctx["high_water"] * (1 - RULES["circuit_breaker_drawdown"]):
+        d.halt = (f"circuit breaker: equity {equity:.2f} (cash {bankroll:.2f} + "
+                  f"open stakes {ctx.get('open_stake', 0.0):.2f}) is >15% below "
                   f"high-water {ctx['high_water']:.2f}; halted pending human review")
         d.rejections.append(("*", d.halt))
         return d

@@ -256,6 +256,14 @@ class Telemetry:
         ).fetchall()
         return {r["market_id"]: r["side"] for r in rows}
 
+    def open_stake(self, agent: str) -> float:
+        """Cost basis (contracts*price + fees) of the agent's open positions."""
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(contracts*price+fees),0) FROM trades "
+            "WHERE agent=? AND status='open'", (agent,)
+        ).fetchone()
+        return row[0]
+
     def total_pnl(self, agent: str) -> float:
         row = self.conn.execute(
             "SELECT COALESCE(SUM(pnl),0) FROM trades WHERE agent=? AND status='settled'", (agent,)

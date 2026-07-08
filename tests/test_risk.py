@@ -68,6 +68,23 @@ def test_circuit_breaker_halts():
     assert d.halt is not None and d.orders == []
 
 
+def test_circuit_breaker_counts_open_stakes_as_equity():
+    # cash is 28% below high-water, but it's staked on open bets, not lost
+    d = risk.evaluate("a", [forecast(prob=0.75, yes_ask=0.55)],
+                      base_ctx(bankroll=72.0, open_stake=28.0,
+                               high_water=100.0, day_start_bankroll=72.0))
+    assert d.halt is None
+    assert len(d.orders) == 1
+
+
+def test_circuit_breaker_trips_on_real_equity_drawdown():
+    # settled losses: cash + open stakes together are >15% below high-water
+    d = risk.evaluate("a", [forecast(prob=0.95, yes_ask=0.30)],
+                      base_ctx(bankroll=70.0, open_stake=10.0,
+                               high_water=100.0, day_start_bankroll=80.0))
+    assert d.halt is not None and d.orders == []
+
+
 def test_max_three_positions_per_day():
     fs = [forecast(prob=0.85, yes_ask=0.55, mid=f"M{i}") for i in range(6)]
     d = risk.evaluate("a", fs, base_ctx())
