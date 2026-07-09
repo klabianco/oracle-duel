@@ -10,8 +10,14 @@ import json
 import operator
 import os
 import re
+import urllib.parse
 
 import requests
+
+# DuckDuckGo's html endpoint serves a JS challenge page (HTTP 202) to
+# non-browser user agents; results only come back with a browser UA
+_BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+               "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
 TOOL_SPECS = [
     {
@@ -75,6 +81,20 @@ def _safe_eval(node):
     raise ValueError("unsupported expression")
 
 
+def _ddg_url(href: str) -> str:
+    """Resolve DDG's redirect links (//duckduckgo.com/l/?uddg=<real>) to the
+    target URL so fetch_page can follow results directly."""
+    href = html.unescape(href)
+    if "uddg=" in href:
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
+        real = q.get("uddg", [""])[0]
+        if real:
+            return real
+    if href.startswith("//"):
+        return "https:" + href
+    return href
+
+
 def _strip_html(raw: str, limit: int = 8000) -> str:
     raw = re.sub(r"(?is)<(script|style|nav|footer|header)[^>]*>.*?</\1>", " ", raw)
     text = re.sub(r"(?s)<[^>]+>", " ", raw)
@@ -112,39 +132,48 @@ class Toolbox:
             return f"tool error: {e}"
 
     def _tool_web_search(self, query: str) -> str:
-        brave_key = os.environ.get("BRAVE_API_KEY")
+        # Brave first when configured; fall back to DuckDuckGo when it errors
+        # (e.g. 402 quota exhausted, 429 rate limit) so agents never go blind
         results = []
-        if brave_key:
-            r = self.session.get(
-                "https://api.search.brave.com/res/v1/web/search",
-                params={"q": query, "count": 6},
-                headers={"X-Subscription-Token": brave_key},
-                timeout=15,
-            )
-            r.raise_for_status()
-            for item in (r.json().get("web", {}).get("results") or [])[:6]:
-                results.append({
-                    "title": item.get("title"), "url": item.get("url"),
-                    "snippet": _strip_html(item.get("description") or "", 300),
-                })
-        else:
-            r = self.session.get(
-                "https://html.duckduckgo.com/html/", params={"q": query}, timeout=15
-            )
-            r.raise_for_status()
-            blocks = re.findall(
-                r'<a rel="nofollow" class="result__a" href="([^"]+)">(.*?)</a>.*?'
-                r'class="result__snippet"[^>]*>(.*?)</',
-                r.text, re.S,
-            )
-            for url, title, snippet in blocks[:6]:
-                results.append({
-                    "title": _strip_html(title, 200), "url": html.unescape(url),
-                    "snippet": _strip_html(snippet, 300),
-                })
+        if os.environ.get("BRAVE_API_KEY"):
+            try:
+                results = self._brave_search(query)
+            except Exception:
+                results = []
+        if not results:
+            results = self._ddg_search(query)
         if not results:
             return "no results"
         return json.dumps(results, ensure_ascii=False)
+
+    def _brave_search(self, query: str) -> list[dict]:
+        r = self.session.get(
+            "https://api.search.brave.com/res/v1/web/search",
+            params={"q": query, "count": 6},
+            headers={"X-Subscription-Token": os.environ["BRAVE_API_KEY"]},
+            timeout=15,
+        )
+        r.raise_for_status()
+        return [{
+            "title": item.get("title"), "url": item.get("url"),
+            "snippet": _strip_html(item.get("description") or "", 300),
+        } for item in (r.json().get("web", {}).get("results") or [])[:6]]
+
+    def _ddg_search(self, query: str) -> list[dict]:
+        r = self.session.get(
+            "https://html.duckduckgo.com/html/", params={"q": query},
+            headers={"User-Agent": _BROWSER_UA}, timeout=15,
+        )
+        r.raise_for_status()
+        blocks = re.findall(
+            r'<a rel="nofollow" class="result__a" href="([^"]+)">(.*?)</a>.*?'
+            r'class="result__snippet"[^>]*>(.*?)</',
+            r.text, re.S,
+        )
+        return [{
+            "title": _strip_html(title, 200), "url": _ddg_url(url),
+            "snippet": _strip_html(snippet, 300),
+        } for url, title, snippet in blocks[:6]]
 
     def _tool_fetch_page(self, url: str) -> str:
         if not url.startswith(("http://", "https://")):
