@@ -1,7 +1,9 @@
 """Static HTML dashboard generated from telemetry.db."""
 
+import html as html_lib
 from datetime import datetime, timezone
 
+from engine import audit_metrics
 from engine.config import STATE_DIR
 
 
@@ -66,6 +68,7 @@ over {brier_all[1]} resolved forecasts</p>
 
     incidents = [dict(r) for r in telemetry.conn.execute(
         "SELECT ts, kind, agent, detail FROM incidents ORDER BY id DESC LIMIT 20")]
+    integrity = html_lib.escape(audit_metrics.report(telemetry, cfg))
     html = f"""<!doctype html><meta charset="utf-8"><title>Oracle Duel</title>
 <style>body{{font-family:system-ui;margin:2rem;max-width:70rem}}
 table{{border-collapse:collapse;margin:.5rem 0}}
@@ -74,8 +77,9 @@ td,th{{border:1px solid #ccc;padding:.25rem .6rem;font-size:.9rem;text-align:lef
 <p>generated {datetime.now(timezone.utc).isoformat()} ·
 mode: {'LIVE' if cfg.get('live') else 'PAPER'}{' (mock)' if cfg.get('mock') else ''}</p>
 {''.join(sections)}
-{pm_html}
-<h2>Recent incidents</h2>{_table(incidents, ['ts', 'kind', 'agent', 'detail'])}
+    {pm_html}
+    <h2>Data integrity</h2><pre>{integrity}</pre>
+    <h2>Recent incidents</h2>{_table(incidents, ['ts', 'kind', 'agent', 'detail'])}
 """
     out = STATE_DIR / "dashboard.html"
     out.write_text(html)

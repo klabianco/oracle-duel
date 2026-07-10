@@ -1,3 +1,5 @@
+import json
+
 from engine.adapters import MockAdapter
 from engine.postmortem import run_postmortem
 from engine.telemetry import Telemetry
@@ -65,3 +67,80 @@ def test_auto_revert_when_mutation_hurts(tmp_path):
     v2 = tel.conn.execute(
         "SELECT reverted FROM prompt_versions WHERE agent='a' AND version=2").fetchone()
     assert v2["reverted"] == 1
+
+
+def test_reverted_prompt_does_not_resurrect_failed_mutation(tmp_path):
+    tel = Telemetry(tmp_path / "t.db")
+    tel.ensure_agent("a", 100)
+    runner = StubRunner(tmp_path, tel)
+    tel.record_version("a", 1, runner.prompt_path.read_text(), 4)
+    _seed_forecasts(tel, version=1, brier_each=0.10)
+    run_postmortem(runner, tel, CFG)  # v2 mutation
+    _seed_forecasts(tel, version=2, brier_each=0.30)
+    run_postmortem(runner, tel, CFG)  # v3 reverts to v1 text
+
+    _seed_forecasts(tel, version=3, brier_each=0.40)
+    out = run_postmortem(runner, tel, CFG)
+    v3 = tel.conn.execute(
+        "SELECT reverted FROM prompt_versions WHERE agent='a' AND version=3").fetchone()
+    assert out["action"] == "mutated" and out["version"] == 4
+    assert v3["reverted"] == 0
+
+
+def test_rejected_mutation_advances_to_a_fresh_round(tmp_path):
+    class NoChangeAdapter:
+        def complete(self, *args, **kwargs):
+            return json.dumps({
+                "postmortem": "No safe change.",
+                "change_description": "No change.",
+                "new_prompt": "Anchor to base rates.\n",
+            })
+
+    tel = Telemetry(tmp_path / "t.db")
+    tel.ensure_agent("a", 100)
+    runner = StubRunner(tmp_path, tel)
+    runner.adapter = NoChangeAdapter()
+    tel.record_version("a", 1, runner.prompt_path.read_text(), 4)
+    _seed_forecasts(tel, version=1, brier_each=0.10)
+
+    out = run_postmortem(runner, tel, CFG)
+    assert out["action"] == "kept" and out["version"] == 2
+    assert tel.current_version("a")["text"] == "Anchor to base rates.\n"
+
+
+def test_generation_failure_defers_instead_of_burning_the_round(tmp_path):
+    class DownAdapter:
+        def complete(self, *args, **kwargs):
+            raise RuntimeError("529 overloaded")
+
+    tel = Telemetry(tmp_path / "t.db")
+    tel.ensure_agent("a", 100)
+    runner = StubRunner(tmp_path, tel)
+    runner.adapter = DownAdapter()
+    tel.record_version("a", 1, runner.prompt_path.read_text(), 4)
+    _seed_forecasts(tel, version=1, brier_each=0.10)
+
+    out = run_postmortem(runner, tel, CFG)
+    # an API outage is not a rejected proposal: version unchanged, no
+    # postmortem recorded, so tomorrow's cycle retries the same round
+    assert out["action"] == "deferred" and out["version"] == 1
+    assert tel.current_version("a")["version"] == 1
+    assert tel.conn.execute("SELECT COUNT(*) FROM postmortems").fetchone()[0] == 0
+
+
+def test_unchanged_prompt_round_never_auto_reverts(tmp_path):
+    tel = Telemetry(tmp_path / "t.db")
+    tel.ensure_agent("a", 100)
+    runner = StubRunner(tmp_path, tel)
+    tel.record_version("a", 1, "Text A.\n", 2)
+    tel.close_version_round("a", 1, 0.20, 6, reverted=False)
+    runner.deploy_prompt("Text B.\n", 2)              # accepted mutation
+    tel.close_version_round("a", 2, 0.15, 6, reverted=False)
+    runner.deploy_prompt("Text B.\n", 3)              # rejected round: same text
+    _seed_forecasts(tel, version=3, brier_each=0.25)  # worse than v1 — noise
+
+    out = run_postmortem(runner, tel, CFG)
+    # v3 made no change, so a bad round must not revert past same-text v2
+    # to the historically worse v1 text
+    assert out["action"] == "mutated"
+    assert "Text A" not in runner.prompt_path.read_text()

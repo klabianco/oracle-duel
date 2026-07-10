@@ -67,6 +67,47 @@ the evening of 2026-07-10 (day 6 of Phase 0.5 paper trading).
 - Phase 4 (calibration meta-model) is spec'd in CLAUDE.md; do not start until
   Phase 2 is stable.
 
+## Independent-audit remediation (2026-07-10, owner approved)
+
+- Gate thresholds/formulas and historical telemetry were not changed. A separate
+  integrity report now exposes matched head-to-head coverage, duplicate markets,
+  and same-day series clustering beside the locked gate.
+- Forecast prices are refreshed immediately before each estimate and persisted
+  with snapshot time, bid/ask, close/expected-expiration, event, and series data.
+- Future scans exclude previously forecast markets and past expected expirations;
+  event and series caps are both 1. This sampling change is documented in CLAUDE.md.
+- Daily cycles use an atomic SQLite date claim and a local-time shell lock; a
+  crash or concurrent launch can no longer spend inference twice for one date.
+- Paper fills use executable book VWAP. Live execution uses the current V2 IOC
+  endpoint and records only confirmed fills, actual price, and reported fees.
+- Settle-only runs regenerate and publish the dashboard, locked gate, and data-
+  integrity report. Prompt rejection/revert transitions advance cleanly without
+  daily retries or resurrecting an already-rejected prompt.
+
+### Review fixes to the remediation (2026-07-10, same day, pre-commit)
+
+A verified code review of the remediation found 10 defects; all fixed before
+commit. Gate formulas, risk.py, and historical rows still untouched.
+
+- Benchmark integrity: the pre-estimate refresh now takes quote fields from the
+  fresh response verbatim (a vanished bid is recorded as gone, never papered
+  over with the scan-time price), and `_market_mid` keeps the historical
+  zero-bid-falls-back-to-ask formula so post-fix rows use the same locked-gate
+  benchmark as every prior row.
+- Cycle claim: the date is claimed only right before paid inference; settle,
+  scan, and the new central eligibility pre-screen run first and stay
+  retryable. A post-claim crash marks the claim `failed` (still unclaimable).
+- Symmetry: markets are eligibility-screened once, centrally, with fresh data
+  before either agent runs; per-agent skips remain only as a last-resort guard.
+- Execution: live IOC submits at exactly the risk-approved price (fills can
+  never exceed the immutable engine's approved position cost). Paper fills take
+  partial fills like live and no longer truncate float book depth per level.
+- Evolution loop: a failed postmortem LLM call defers the round to the next
+  cycle instead of burning the mutation budget, and a round that made no prompt
+  change can never auto-revert past a same-text version to older, worse text.
+- Mock: mock markets carry their own event/series tickers, so per-series caps
+  no longer collapse the mock universe to one market.
+
 ## Operational map
 
 - Daily flow: launchd 07:00 → `bin/daily.sh` → `orchestrator cycle` (settle →
@@ -81,4 +122,4 @@ the evening of 2026-07-10 (day 6 of Phase 0.5 paper trading).
   category on the event object; `mve_collection_ticker` marks excluded parlays.
   Markets finalize with a lag after close — a market can be past close_time
   and still `active`.
-- Tests: `.venv/bin/python -m pytest` (38 tests).
+- Tests: `.venv/bin/python -m pytest` (54 tests).

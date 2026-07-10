@@ -10,12 +10,14 @@ def _parse_ts(s: str) -> datetime:
     return dt
 
 
-def scan(client, cfg: dict, now: datetime = None) -> list[dict]:
+def scan(client, cfg: dict, now: datetime = None,
+         exclude_market_ids: set[str] = None) -> list[dict]:
     sc = cfg["scanner"]
     now = now or getattr(client, "now", lambda: datetime.now(timezone.utc))()
     min_close = now + timedelta(hours=sc["min_horizon_hours"])
     max_close = now + timedelta(days=sc["max_horizon_days"])
     excludes = [p.lower() for p in sc["exclude_title_patterns"]]
+    exclude_market_ids = exclude_market_ids or set()
 
     exclude_cats = [c.lower() for c in sc.get("exclude_categories", [])]
 
@@ -38,6 +40,8 @@ def scan(client, cfg: dict, now: datetime = None) -> list[dict]:
                 markets.append(m)
     picked = []
     for m in markets:
+        if m["market_id"] in exclude_market_ids:
+            continue
         if not m.get("close_time") or m.get("yes_ask") is None or m.get("yes_bid") is None:
             continue
         if m.get("mve"):
@@ -45,6 +49,9 @@ def scan(client, cfg: dict, now: datetime = None) -> list[dict]:
         close = _parse_ts(m["close_time"])
         if not (min_close <= close <= max_close):
             continue
+        expected = m.get("expected_expiration_time")
+        if expected and _parse_ts(expected) <= now:
+            continue  # do not forecast events whose expected outcome time has passed
         title = (m.get("title") or "").lower()
         if any(p in title for p in excludes):
             continue
@@ -57,10 +64,39 @@ def scan(client, cfg: dict, now: datetime = None) -> list[dict]:
     # sort for speed-to-verdict: soonest-resolving day first, most liquid within a day
     picked.sort(key=lambda m: (_parse_ts(m["close_time"]).date().toordinal(),
                                -m.get("volume", 0)))
-    picked = picked[: sc["target_markets"] * 4]  # headroom for category/event dedup below
+
+    # Reduce ladder-heavy result sets before event enrichment. Keep generous
+    # headroom because exact series metadata and category caps are applied below.
+    per_event_cap = sc.get("max_per_event", 2)
+    per_series_cap = sc.get("max_per_series", 3)
+    rough_event, rough_series, diverse = {}, {}, []
+    for m in picked:
+        ev = m.get("event_ticker") or m["market_id"]
+        series = m.get("series_ticker") or ev.split("-")[0]
+        if rough_event.get(ev, 0) >= per_event_cap:
+            continue
+        if per_series_cap and rough_series.get(series, 0) >= per_series_cap:
+            continue
+        rough_event[ev] = rough_event.get(ev, 0) + 1
+        rough_series[series] = rough_series.get(series, 0) + 1
+        diverse.append(m)
+        if len(diverse) >= sc["target_markets"] * 8:
+            break
+    picked = diverse
 
     # category lives on the event object in the current API; enrich the survivors only
-    if picked and not picked[0].get("category") and hasattr(client, "get_event_category"):
+    if picked and hasattr(client, "get_event_metadata"):
+        for m in picked:
+            try:
+                meta = client.get_event_metadata(m["event_ticker"])
+                if not m.get("category"):
+                    m["category"] = meta["category"]
+                if not m.get("series_ticker"):
+                    m["series_ticker"] = meta.get("series_ticker")
+            except Exception:
+                if not m.get("category"):
+                    m["category"] = "uncategorized"
+    elif picked and not picked[0].get("category") and hasattr(client, "get_event_category"):
         for m in picked:
             try:
                 m["category"] = client.get_event_category(m["event_ticker"])
@@ -73,8 +109,6 @@ def scan(client, cfg: dict, now: datetime = None) -> list[dict]:
     # ladder relists as a fresh event at every close time, so SOL-5pm-today +
     # SOL-5pm-tomorrow stack past the event cap), and per category (crypto
     # ladders dominate the fast-closing supply and are near-random-walk noise)
-    per_event_cap = sc.get("max_per_event", 2)
-    per_series_cap = sc.get("max_per_series", 3)
     per_cat_cap = sc.get("max_per_category")
     by_event, by_series, by_cat, final = {}, {}, {}, []
     for m in picked:

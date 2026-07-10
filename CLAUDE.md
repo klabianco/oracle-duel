@@ -116,6 +116,16 @@ max_per_series: 3 — the same price ladder relists per close time, so SOL-today
 settle-only pass (launchd com.oracleduel.settle, 7pm) grades same-day closes
 the same evening; the morning cycle previously left them for the next day.
 
+NOTE 2026-07-10 (owner-approved audit remediation): gate thresholds and formulas
+remain untouched, and all historical rows are preserved. Future sampling now
+allows at most one market per event and series, never forecasts the same market
+on a later day, and excludes markets whose expected expiration has passed. Each
+agent's stored market benchmark is refreshed immediately before estimation and
+is recorded with its bid/ask snapshot and timestamp. The dashboard reports
+matched-agent coverage plus repeat/series clustering so the known pre-fix July 6
+asymmetry and non-independent historical rows remain visible rather than being
+silently excluded after outcomes arrived.
+
 ## Commands
 
 ```bash

@@ -10,11 +10,13 @@ Commands:
 """
 
 import argparse
+import os
 import sys
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
-from engine import gates, postmortem, risk, scanner, scorer
-from engine.agent_runner import AgentRunner
+from engine import audit_metrics, gates, postmortem, risk, scanner, scorer
+from engine.agent_runner import AgentRunner, market_ineligible
 from engine.alerts import Alerts
 from engine.config import DB_PATH, STATE_DIR, load_config, stop_flag_set
 from engine.dashboard import generate as generate_dashboard
@@ -32,6 +34,37 @@ def _now(client) -> datetime:
     return getattr(client, "now", lambda: datetime.now(timezone.utc))()
 
 
+def _cycle_date(client, cfg) -> str:
+    override = os.environ.get("ORACLE_CYCLE_DATE")
+    if override:
+        return override
+    tz = ZoneInfo(cfg.get("timezone", "America/Los_Angeles"))
+    return _now(client).astimezone(tz).date().isoformat()
+
+
+def _paper_fill(client, order: risk.Order) -> tuple[int, float] | None:
+    """IOC-style fill against the executable book within the immutable
+    engine's slippage bound. Mirrors live semantics: partial fills are
+    taken (truncated to whole contracts, like the live path's int()), and
+    None means nothing filled at all."""
+    book = client.get_orderbook(order.market_id)
+    ladder = book.get("no_bids" if order.side == "yes" else "yes_bids") or []
+    limit = order.price + risk.RULES["max_slippage"]
+    levels = sorted((round(1.0 - p, 4), q) for p, q in ladder)
+    available = sum(q for price, q in levels if price <= limit)
+    contracts = min(order.contracts, int(available))
+    if contracts <= 0:
+        return None
+    remaining, cost = contracts, 0.0
+    for fill_price, qty in levels:
+        if fill_price > limit or remaining <= 0:
+            continue
+        filled = min(remaining, qty)
+        remaining -= filled
+        cost += filled * fill_price
+    return contracts, round(cost / contracts, 4)
+
+
 def place_orders(agent: str, decision: risk.Decision, telemetry, client, cfg, date, alerts):
     """Submit (live) or simulate (paper) the approved orders. STOP is re-checked here."""
     for order in decision.orders:
@@ -40,27 +73,72 @@ def place_orders(agent: str, decision: risk.Decision, telemetry, client, cfg, da
             alerts.send(f"[{agent}] order blocked: STOP file present")
             return
         order_id, paper = None, 1
+        contracts, fill_price, fees = order.contracts, order.price, order.fees
         if cfg.get("live") and not cfg.get("mock"):
             try:
+                # IOC at exactly the risk-approved price: the immutable engine
+                # sized the position at order.price, so fills above it would
+                # breach the approved position cost. max_slippage governs the
+                # engine's own depth checks, not an authority to pay more.
                 resp = client.create_order(order.market_id, order.side,
                                            order.contracts, order.price)
-                order_id = resp.get("order", {}).get("order_id")
+                order_id = resp.get("order_id")
+                contracts = int(resp.get("filled_count") or 0)
+                if contracts <= 0:
+                    telemetry.incident(
+                        "order_unfilled", agent,
+                        {"market": order.market_id, "order_id": order_id},
+                    )
+                    continue
+                fill_price = resp.get("average_fill_price") or order.price
+                fees = resp.get("fees_paid")
+                if fees is None:
+                    fees = risk.total_fee(fill_price, contracts)
+                if contracts < order.contracts:
+                    telemetry.incident(
+                        "order_partial_fill", agent,
+                        {"market": order.market_id, "requested": order.contracts,
+                         "filled": contracts, "order_id": order_id},
+                    )
                 paper = 0
             except Exception as e:
                 telemetry.incident("order_rejected", agent,
                                    {"market": order.market_id, "error": str(e)})
                 alerts.send(f"[{agent}] ORDER REJECTED {order.market_id}: {e}")
                 continue
+        elif not cfg.get("mock"):
+            try:
+                fill = _paper_fill(client, order)
+            except Exception as e:
+                telemetry.incident(
+                    "paper_fill_error", agent,
+                    {"market": order.market_id, "error": str(e)},
+                )
+                continue
+            if fill is None:
+                telemetry.incident(
+                    "paper_order_unfilled", agent,
+                    {"market": order.market_id, "requested": order.contracts},
+                )
+                continue
+            contracts, fill_price = fill
+            if contracts < order.contracts:
+                telemetry.incident(
+                    "paper_partial_fill", agent,
+                    {"market": order.market_id, "requested": order.contracts,
+                     "filled": contracts},
+                )
+            fees = risk.total_fee(fill_price, contracts)
         telemetry.record_trade(
             cycle_date=date, agent=agent, market_id=order.market_id, side=order.side,
-            contracts=order.contracts, price=order.price, fees=order.fees,
+            contracts=contracts, price=fill_price, fees=fees,
             status="open", paper=paper, order_id=order_id,
         )
         # deduct cost + fees now; scorer credits the payout at settlement
-        telemetry.adjust_bankroll(agent, -(order.contracts * order.price + order.fees))
+        telemetry.adjust_bankroll(agent, -(contracts * fill_price + fees))
         alerts.send(f"[{agent}] {'LIVE' if not paper else 'paper'} order: "
-                    f"{order.contracts}x {order.side.upper()} {order.market_id} "
-                    f"@ {order.price:.2f} (net edge {order.edge_net:+.3f})")
+                    f"{contracts}x {order.side.upper()} {order.market_id} "
+                    f"@ {fill_price:.4f} (forecast-time net edge {order.edge_net:+.3f})")
 
 
 def scoreboard(telemetry, cfg) -> str | None:
@@ -203,7 +281,7 @@ def cycle(cfg):
     telemetry = Telemetry(DB_PATH)
     alerts = Alerts(cfg)
     client = make_client(cfg)
-    date = _now(client).date().isoformat()
+    date = _cycle_date(client, cfg)
 
     if not client.exchange_ok():
         telemetry.incident("exchange_down", None, "skipping cycle, never queueing stale orders")
@@ -214,11 +292,50 @@ def cycle(cfg):
     stats = scorer.score_resolutions(client, telemetry)
 
     # 2) shared market list
-    markets = scanner.scan(client, cfg, now=_now(client))
+    markets = scanner.scan(
+        client, cfg, now=_now(client),
+        exclude_market_ids=telemetry.forecasted_market_ids(),
+    )
+    # Re-check eligibility with fresh data once, centrally, so both agents
+    # receive the identical final list (symmetry ground rule). The per-agent
+    # check in run_cycle remains only as a last-resort guard for markets that
+    # flip during the run itself.
+    screened = []
+    for m in markets:
+        try:
+            fresh = client.get_market(m["market_id"])
+        except Exception:
+            screened.append(m)  # transient fetch error — agents re-check anyway
+            continue
+        reason = market_ineligible(fresh, now=_now(client))
+        if reason:
+            telemetry.incident("prescreen_dropped", None,
+                               {"market": m["market_id"], "reason": reason})
+            continue
+        screened.append(m)
+    markets = screened
     if not markets:
         alerts.send("scanner found no eligible markets — cycle ends")
         return
 
+    # Claim the date only now, right before paid inference. Settle, scan and
+    # pre-screen are idempotent and safe to retry after a transient failure;
+    # agent inference must never run twice for one date.
+    if not telemetry.claim_cycle(date):
+        telemetry.incident("duplicate_cycle_blocked", None, {"cycle_date": date})
+        print(f"cycle {date}: already claimed; refusing to spend inference again")
+        return
+    try:
+        _paid_cycle(cfg, telemetry, alerts, client, date, markets, stats)
+    except Exception as e:
+        telemetry.complete_cycle(date, "failed", str(e))
+        raise
+    telemetry.complete_cycle(date)
+
+
+def _paid_cycle(cfg, telemetry, alerts, client, date, markets, stats):
+    """Everything downstream of the date claim: agent inference, orders,
+    round close, digest. The caller marks the claim 'failed' on any raise."""
     alerts.send(f"Good morning — the robots are starting work on {len(markets)} markets. "
                 "Results in an hour or two.", title="oracle-duel: cycle started")
 
@@ -239,7 +356,8 @@ def cycle(cfg):
         runner = AgentRunner(name, agent_cfg, cfg, telemetry)
         runners[name] = runner
         try:
-            all_forecasts[name] = runner.run_cycle(markets, date, alerts)
+            all_forecasts[name] = runner.run_cycle(
+                markets, date, alerts, refresh_market=client.get_market)
         except Exception as e:
             telemetry.incident("agent_cycle_error", name, str(e))
             alerts.send(f"[{name}] cycle failed: {e}")
@@ -289,6 +407,7 @@ def cycle(cfg):
         sb = scoreboard(telemetry, cfg)
         if sb:
             sb += "\n" + gates.report(telemetry, cfg)
+            sb += "\n" + audit_metrics.report(telemetry, cfg)
             alerts.send(sb, title="oracle-duel round scoreboard")
             print(sb)
 
@@ -315,6 +434,7 @@ def cycle(cfg):
                          f"[{pb['lo']:+.4f}, {pb['hi']:+.4f}] n={pb['n']}")
     # technical digest -> log/stdout; plain-language digest -> the push notification
     print("\n".join(lines))
+    print(audit_metrics.report(telemetry, cfg))
     digest = plain_digest(telemetry, cfg, date, len(markets), all_forecasts)
     alerts.send(digest, title="oracle-duel daily digest")
     generate_dashboard(telemetry, cfg)
@@ -366,15 +486,29 @@ def main():
     elif args.command == "dashboard":
         print(generate_dashboard(Telemetry(DB_PATH), cfg))
     elif args.command == "gate":
-        print(gates.report(Telemetry(DB_PATH), cfg))
+        telemetry = Telemetry(DB_PATH)
+        print(gates.report(telemetry, cfg))
+        print(audit_metrics.report(telemetry, cfg))
     elif args.command == "resume":
         resume(cfg)
     elif args.command == "settle":
         # settle-only pass (evening launchd job): grades whatever finalized
         # since the morning cycle so trades don't wait a full day
-        stats = scorer.score_resolutions(make_client(cfg), Telemetry(DB_PATH))
+        telemetry = Telemetry(DB_PATH)
+        stats = scorer.score_resolutions(make_client(cfg), telemetry)
+        report = gates.report(telemetry, cfg)
+        integrity = audit_metrics.report(telemetry, cfg)
+        generate_dashboard(telemetry, cfg)
         print(f"settle: {stats['forecasts_resolved']} forecasts resolved, "
               f"{stats['trades_settled']} trades settled, pnl {stats['pnl']}")
+        print(report)
+        print(integrity)
+        if stats["forecasts_resolved"] or stats["trades_settled"]:
+            Alerts(cfg).send(
+                f"Evening settlement: {stats['forecasts_resolved']} forecasts resolved, "
+                f"{stats['trades_settled']} trades settled.\n\n{report}\n\n{integrity}",
+                title="oracle-duel evening settlement",
+            )
     elif args.command == "postmortem":
         telemetry = Telemetry(DB_PATH)
         alerts = Alerts(cfg)
@@ -392,6 +526,8 @@ def main():
         if closed:
             sb = scoreboard(telemetry, cfg)
             if sb:
+                sb += "\n" + gates.report(telemetry, cfg)
+                sb += "\n" + audit_metrics.report(telemetry, cfg)
                 alerts.send(sb, title="oracle-duel round scoreboard")
                 print(sb)
     elif args.command == "fast-forward":

@@ -121,14 +121,20 @@ class KalshiClient:
         data = self._request("GET", f"/markets/{ticker}")
         return self._normalize(data["market"])
 
-    def get_event_category(self, event_ticker: str) -> str:
+    def get_event_metadata(self, event_ticker: str) -> dict:
         if not hasattr(self, "_event_cache"):
             self._event_cache = {}
         if event_ticker not in self._event_cache:
             data = self._request("GET", f"/events/{event_ticker}")
-            self._event_cache[event_ticker] = (
-                data.get("event", {}).get("category") or "uncategorized").lower()
+            event = data.get("event", {})
+            self._event_cache[event_ticker] = {
+                "category": (event.get("category") or "uncategorized").lower(),
+                "series_ticker": event.get("series_ticker"),
+            }
         return self._event_cache[event_ticker]
+
+    def get_event_category(self, event_ticker: str) -> str:
+        return self.get_event_metadata(event_ticker)["category"]
 
     def get_orderbook(self, ticker: str, depth: int = 10) -> dict:
         data = self._request("GET", f"/markets/{ticker}/orderbook", params={"depth": depth})
@@ -153,16 +159,37 @@ class KalshiClient:
 
     def create_order(self, ticker: str, side: str, count: int, price: float,
                      action: str = "buy", client_order_id: str = None) -> dict:
+        if action != "buy":
+            raise KalshiError("event-order adapter currently supports buys only")
+        yes_price = price if side == "yes" else 1.0 - price
         body = {
             "ticker": ticker,
-            "action": action,
-            "side": side,                      # 'yes' | 'no'
-            "count": count,
-            "type": "limit",
-            f"{side}_price": int(round(price * 100)),
+            "side": "bid" if side == "yes" else "ask",
+            "count": f"{count:.2f}",
+            "price": f"{yes_price:.4f}",
+            "time_in_force": "immediate_or_cancel",
+            "self_trade_prevention_type": "taker_at_cross",
+            "post_only": False,
+            "cancel_order_on_pause": True,
+            "reduce_only": False,
+            "exchange_index": 0,
             "client_order_id": client_order_id or f"oracle-{int(time.time()*1000)}",
         }
-        return self._request("POST", "/portfolio/orders", body=body)
+        data = self._request("POST", "/portfolio/events/orders", body=body)
+        filled = float(data.get("fill_count") or 0)
+        average = data.get("average_fill_price")
+        outcome_price = None
+        if average is not None:
+            average = float(average)
+            outcome_price = average if side == "yes" else 1.0 - average
+        average_fee = data.get("average_fee_paid")
+        return {
+            "order_id": data.get("order_id"),
+            "filled_count": filled,
+            "remaining_count": float(data.get("remaining_count") or 0),
+            "average_fill_price": outcome_price,
+            "fees_paid": (float(average_fee) * filled) if average_fee is not None else None,
+        }
 
     @staticmethod
     def _normalize(m: dict) -> dict:
@@ -179,6 +206,7 @@ class KalshiClient:
         return {
             "market_id": m.get("ticker"),
             "event_ticker": m.get("event_ticker"),
+            "series_ticker": m.get("series_ticker"),
             "title": m.get("title") or m.get("yes_sub_title") or m.get("ticker"),
             "category": (m.get("category") or "").lower(),  # enriched from the event
             "mve": bool(m.get("mve_collection_ticker")),    # multi-leg parlay market
@@ -186,6 +214,7 @@ class KalshiClient:
             "volume": volume,
             "open_interest": open_interest,
             "close_time": m.get("close_time"),
+            "expected_expiration_time": m.get("expected_expiration_time"),
             "status": m.get("status"),
             "result": m.get("result"),  # 'yes' | 'no' | '' when settled
             "rules": (m.get("rules_primary") or "")[:1500],
@@ -239,6 +268,12 @@ class MockKalshiClient:
             outcome = "yes" if random.Random(f"outcome-{i}").random() < true_p else "no"
         return {
             "market_id": f"MOCK-{cat[:4].upper()}-{i:03d}",
+            # each mock market is an independent question, so it is its own
+            # event AND series — otherwise the scanner's series-prefix
+            # fallback maps every id to "MOCK" and per-series caps collapse
+            # the whole universe to one market
+            "event_ticker": f"MOCK-{cat[:4].upper()}-{i:03d}",
+            "series_ticker": f"MOCKSER{i:03d}",
             "title": f"Mock {cat} event #{i}: will threshold be exceeded by {close.date()}?",
             "category": cat,
             "yes_bid": round(mid - spread / 2, 2),
@@ -280,4 +315,10 @@ class MockKalshiClient:
         return 200.0
 
     def create_order(self, ticker, side, count, price, action="buy", client_order_id=None):
-        return {"order": {"order_id": f"mock-{ticker}-{side}-{count}", "status": "executed"}}
+        return {
+            "order_id": f"mock-{ticker}-{side}-{count}",
+            "filled_count": float(count),
+            "remaining_count": 0.0,
+            "average_fill_price": price,
+            "fees_paid": None,
+        }

@@ -105,3 +105,38 @@ def test_horizon_bounds_still_respected():
     ok = _market(3, NOW + timedelta(days=2))
     picked = scanner.scan(PageCappedClient([inside_6h, beyond_max, ok]), CFG, now=NOW)
     assert [m["market_id"] for m in picked] == ["M3"]
+
+
+def test_excludes_previously_forecast_and_past_expected_expiration():
+    old = _market(1, NOW + timedelta(days=1))
+    expired = _market(2, NOW + timedelta(days=1))
+    expired["expected_expiration_time"] = (NOW - timedelta(minutes=1)).isoformat()
+    ok = _market(3, NOW + timedelta(days=1))
+    picked = scanner.scan(
+        PageCappedClient([old, expired, ok]), CFG, now=NOW,
+        exclude_market_ids={"M1"},
+    )
+    assert [m["market_id"] for m in picked] == ["M3"]
+
+
+def test_event_metadata_supplies_real_series_key():
+    class MetadataClient(PageCappedClient):
+        def get_event_metadata(self, event_ticker):
+            return {"category": "crypto", "series_ticker": "REAL-SERIES"}
+
+    markets = [_market(i, NOW + timedelta(days=1)) for i in range(4)]
+    cfg = {"scanner": {**CFG["scanner"], "max_per_series": 1}}
+    picked = scanner.scan(MetadataClient(markets), cfg, now=NOW)
+    assert len(picked) == 1
+    assert picked[0]["series_ticker"] == "REAL-SERIES"
+
+
+def test_mock_universe_survives_the_series_caps(tmp_path):
+    # every mock market is its own event/series; per-event and per-series
+    # caps of 1 must not collapse the mock universe to a single market
+    from engine.kalshi_client import MockKalshiClient
+
+    client = MockKalshiClient(tmp_path / "mock.json")
+    cfg = {"scanner": {**CFG["scanner"], "max_per_event": 1, "max_per_series": 1}}
+    picked = scanner.scan(client, cfg, now=client.now())
+    assert len(picked) >= 30

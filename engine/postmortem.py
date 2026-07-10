@@ -77,7 +77,7 @@ def _build_report(telemetry, agent: str, version: int) -> str:
     lines = [f"PROMPT VERSION: v{version}",
              f"OVERALL: brier={brier:.4f} over {n} resolved forecasts",
              "", "BRIER BY CATEGORY:"]
-    for r in telemetry.category_error_log(agent):
+    for r in telemetry.category_error_log(agent, version):
         lines.append(f"- {r['category']}: n={r['n']} brier={r['brier']:.3f} "
                      f"avg_forecast={r['avg_prob']:.2f} hit_rate={r['hit_rate']:.2f}")
     lines += ["", "CALIBRATION CURVE (forecast bucket -> actual hit rate):"]
@@ -104,16 +104,23 @@ def run_postmortem(runner, telemetry, cfg: dict, alerts=None, now: datetime = No
     # ---- auto-revert: evolution requires selection ------------------------
     if version > 1:
         prev = telemetry.conn.execute(
-            "SELECT * FROM prompt_versions WHERE agent=? AND version=? ",
-            (agent, version - 1),
+            "SELECT * FROM prompt_versions WHERE agent=? AND version<? "
+            "AND reverted=0 AND round_brier IS NOT NULL "
+            "ORDER BY version DESC LIMIT 1",
+            (agent, version),
         ).fetchone()
-        if prev and prev["round_brier"] is not None and brier > prev["round_brier"]:
+        # Revert only when this round actually CHANGED the prompt (text
+        # differs from the last selected version). An unchanged prompt that
+        # scores worse is round-to-round noise, not a failed mutation —
+        # reverting past it would discard the best selected text.
+        if (prev and prev["round_brier"] is not None
+                and prev["text"] != cur["text"] and brier > prev["round_brier"]):
             new_version = version + 1
             runner.deploy_prompt(prev["text"], new_version)
             telemetry.close_version_round(agent, version, brier, n, reverted=True)
             telemetry.record_postmortem(agent, version,
                                         f"auto-revert: v{version} brier {brier:.4f} worse than "
-                                        f"v{version-1} {prev['round_brier']:.4f}",
+                                        f"v{prev['version']} {prev['round_brier']:.4f}",
                                         "revert to previous prompt", accepted=True)
             _commit_prompt(runner, new_version,
                            f"{agent} v{new_version}: auto-revert of failed mutation v{version}")
@@ -158,6 +165,16 @@ def run_postmortem(runner, telemetry, cfg: dict, alerts=None, now: datetime = No
 
     runner._flush_spend(datetime.now(timezone.utc).date().isoformat(), "postmortem")
 
+    if not accepted and reason.startswith("postmortem generation failed"):
+        # The model call itself failed (outage, timeout) — that is not a
+        # rejected proposal. Leave the version in place so tomorrow's cycle
+        # retries the postmortem instead of burning the round's mutation.
+        telemetry.incident("postmortem_deferred", agent, reason)
+        if alerts:
+            alerts.send(f"[{agent}] postmortem could not be generated ({reason}); "
+                        "retrying next cycle")
+        return {"agent": agent, "action": "deferred", "version": version, "brier": brier}
+
     if accepted:
         new_version = version + 1
         runner.deploy_prompt(out["new_prompt"].strip() + "\n", new_version)
@@ -177,9 +194,12 @@ def run_postmortem(runner, telemetry, cfg: dict, alerts=None, now: datetime = No
                 title=f"what {agent} learned")
         return {"agent": agent, "action": "mutated", "version": new_version, "brier": brier}
 
+    new_version = version + 1
+    runner.deploy_prompt(old_prompt, new_version)
+    _commit_prompt(runner, new_version, f"{agent} v{new_version}: prompt kept unchanged")
     telemetry.record_postmortem(agent, version, (out or {}).get("postmortem", ""),
                                 f"REJECTED: {reason}", accepted=False)
     telemetry.incident("mutation_rejected", agent, reason)
     if alerts:
         alerts.send(f"[{agent}] prompt mutation rejected ({reason}); keeping v{version}")
-    return {"agent": agent, "action": "kept", "version": version, "brier": brier}
+    return {"agent": agent, "action": "kept", "version": new_version, "brier": brier}

@@ -17,6 +17,15 @@ CREATE TABLE IF NOT EXISTS forecasts (
     market_price REAL,
     edge_net REAL,
     confidence_notes TEXT,
+    snapshot_at TEXT,
+    yes_bid REAL,
+    yes_ask REAL,
+    no_bid REAL,
+    no_ask REAL,
+    close_time TEXT,
+    expected_expiration_time TEXT,
+    event_ticker TEXT,
+    series_ticker TEXT,
     resolved INTEGER DEFAULT 0,
     outcome INTEGER,
     brier REAL,
@@ -94,7 +103,26 @@ CREATE TABLE IF NOT EXISTS agent_state (
     halted INTEGER DEFAULT 0,
     halted_reason TEXT
 );
+CREATE TABLE IF NOT EXISTS cycle_runs (
+    cycle_date TEXT PRIMARY KEY,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    status TEXT NOT NULL,
+    detail TEXT
+);
 """
+
+FORECAST_COLUMNS = {
+    "snapshot_at": "TEXT",
+    "yes_bid": "REAL",
+    "yes_ask": "REAL",
+    "no_bid": "REAL",
+    "no_ask": "REAL",
+    "close_time": "TEXT",
+    "expected_expiration_time": "TEXT",
+    "event_ticker": "TEXT",
+    "series_ticker": "TEXT",
+}
 
 
 def _now() -> str:
@@ -106,6 +134,38 @@ class Telemetry:
         self.conn = sqlite3.connect(str(db_path))
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        existing = {r[1] for r in self.conn.execute("PRAGMA table_info(forecasts)")}
+        for name, kind in FORECAST_COLUMNS.items():
+            if name not in existing:
+                self.conn.execute(f"ALTER TABLE forecasts ADD COLUMN {name} {kind}")
+        # Existing forecast dates are completed historical cycles. Backfilling them
+        # prevents the new atomic claim from allowing an accidental same-day rerun.
+        self.conn.execute(
+            "INSERT OR IGNORE INTO cycle_runs(cycle_date, started_at, completed_at, status, detail) "
+            "SELECT cycle_date, MIN(created_at), MAX(created_at), 'legacy_complete', "
+            "'backfilled from forecasts' FROM forecasts GROUP BY cycle_date"
+        )
+        self.conn.commit()
+
+    # ---- cycle claims --------------------------------------------------
+    def claim_cycle(self, cycle_date: str) -> bool:
+        """Atomically claim a calendar date before any paid inference starts."""
+        try:
+            self.conn.execute(
+                "INSERT INTO cycle_runs(cycle_date, started_at, status) VALUES (?,?,?)",
+                (cycle_date, _now(), "started"),
+            )
+            self.conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            self.conn.rollback()
+            return False
+
+    def complete_cycle(self, cycle_date: str, status: str = "completed", detail: str = None):
+        self.conn.execute(
+            "UPDATE cycle_runs SET completed_at=?, status=?, detail=? WHERE cycle_date=?",
+            (_now(), status, detail, cycle_date),
+        )
         self.conn.commit()
 
     # ---- agent state -------------------------------------------------
@@ -146,16 +206,27 @@ class Telemetry:
         self.conn.commit()
 
     # ---- forecasts ----------------------------------------------------
-    def record_forecast(self, **kw):
-        self.conn.execute(
+    def record_forecast(self, **kw) -> int | None:
+        values = {name: None for name in FORECAST_COLUMNS}
+        values.update(kw)
+        values["created_at"] = _now()
+        cur = self.conn.execute(
             """INSERT OR IGNORE INTO forecasts
                (cycle_date, agent, prompt_version, market_id, market_title, category,
-                prob, market_price, edge_net, confidence_notes, created_at)
+                prob, market_price, edge_net, confidence_notes, snapshot_at,
+                yes_bid, yes_ask, no_bid, no_ask, close_time,
+                expected_expiration_time, event_ticker, series_ticker, created_at)
                VALUES (:cycle_date,:agent,:prompt_version,:market_id,:market_title,
-                       :category,:prob,:market_price,:edge_net,:confidence_notes,:created_at)""",
-            {**kw, "created_at": _now()},
+                       :category,:prob,:market_price,:edge_net,:confidence_notes,:snapshot_at,
+                       :yes_bid,:yes_ask,:no_bid,:no_ask,:close_time,
+                       :expected_expiration_time,:event_ticker,:series_ticker,:created_at)""",
+            values,
         )
         self.conn.commit()
+        return cur.lastrowid if cur.rowcount else None
+
+    def forecasted_market_ids(self) -> set[str]:
+        return {r[0] for r in self.conn.execute("SELECT DISTINCT market_id FROM forecasts")}
 
     def unresolved_forecasts(self) -> list[dict]:
         return [dict(r) for r in self.conn.execute("SELECT * FROM forecasts WHERE resolved=0")]
@@ -181,13 +252,18 @@ class Telemetry:
         ).fetchone()
         return row[0], row[1]
 
-    def category_error_log(self, agent: str) -> list[dict]:
-        rows = self.conn.execute(
+    def category_error_log(self, agent: str, version: int = None) -> list[dict]:
+        q = (
             "SELECT category, COUNT(*) n, AVG(brier) brier, AVG(prob) avg_prob, "
             "AVG(outcome) hit_rate FROM forecasts "
-            "WHERE agent=? AND resolved=1 GROUP BY category ORDER BY n DESC",
-            (agent,),
-        ).fetchall()
+            "WHERE agent=? AND resolved=1"
+        )
+        args = [agent]
+        if version is not None:
+            q += " AND prompt_version=?"
+            args.append(version)
+        q += " GROUP BY category ORDER BY n DESC"
+        rows = self.conn.execute(q, args).fetchall()
         return [dict(r) for r in rows]
 
     def worst_misses(self, agent: str, version: int, limit: int = 5) -> list[dict]:

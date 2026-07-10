@@ -3,6 +3,7 @@
 
 live: false        # false = paper mode: orders logged, never submitted
 mock: false        # true = mock Kalshi + mock LLMs, for pipeline testing with zero spend
+timezone: America/Los_Angeles
 
 agents:
   claude:
@@ -24,8 +25,8 @@ scanner:
   target_markets: 40
   exclude_title_patterns: ["mention", "tweet", "say ", "says ", "post about"]
   exclude_categories: ["exotics", "mentions", "social"]
-  max_per_event: 2
-  max_per_series: 3      # same ladder relists per close time (SOL today + SOL tomorrow); cap the underlying
+  max_per_event: 1       # reduce direct duplicate outcomes within one event
+  max_per_series: 1      # one ladder per underlying series per daily sample
   max_per_category: 10   # crypto price ladders dominate fast-closing supply; keep the mix broad
 
 research:
