@@ -4,6 +4,7 @@ Commands:
   cycle          full daily cycle (scan -> forecast -> score -> trade -> digest)
   postmortem     close rounds that are complete (runs automatically inside cycle too)
   status         print bankrolls, spend, forecast counts
+  settle         settle-only pass: grade forecasts/trades that finalized since the cycle
   dashboard      regenerate state/dashboard.html
   fast-forward N advance the mock clock N days (mock mode only)
 """
@@ -352,7 +353,7 @@ def resume(cfg):
 def main():
     ap = argparse.ArgumentParser(prog="orchestrator")
     ap.add_argument("command", choices=["cycle", "postmortem", "status", "dashboard",
-                                        "gate", "resume", "fast-forward"])
+                                        "gate", "resume", "settle", "fast-forward"])
     ap.add_argument("days", nargs="?", type=int, default=1)
     ap.add_argument("--config", default=None)
     args = ap.parse_args()
@@ -368,6 +369,12 @@ def main():
         print(gates.report(Telemetry(DB_PATH), cfg))
     elif args.command == "resume":
         resume(cfg)
+    elif args.command == "settle":
+        # settle-only pass (evening launchd job): grades whatever finalized
+        # since the morning cycle so trades don't wait a full day
+        stats = scorer.score_resolutions(make_client(cfg), Telemetry(DB_PATH))
+        print(f"settle: {stats['forecasts_resolved']} forecasts resolved, "
+              f"{stats['trades_settled']} trades settled, pnl {stats['pnl']}")
     elif args.command == "postmortem":
         telemetry = Telemetry(DB_PATH)
         alerts = Alerts(cfg)
