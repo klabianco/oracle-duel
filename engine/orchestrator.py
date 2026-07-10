@@ -222,13 +222,19 @@ def cycle(cfg):
                 "Results in an hour or two.", title="oracle-duel: cycle started")
 
     agent_names = list(cfg["agents"].keys())
+    # Alternate who researches/bets first each day: shared-resource failures
+    # (search quotas) and order-dependent effects must not always land on the
+    # same agent. Date parity keeps it deterministic and re-run-safe.
+    if datetime.fromisoformat(date).toordinal() % 2:
+        agent_names.reverse()
     for name in agent_names:
         telemetry.ensure_agent(name, cfg["bankroll_start"])
         telemetry.start_day(name, date)
 
     # 3) forecast everything, bet little
     runners, all_forecasts = {}, {}
-    for name, agent_cfg in cfg["agents"].items():
+    for name in agent_names:
+        agent_cfg = cfg["agents"][name]
         runner = AgentRunner(name, agent_cfg, cfg, telemetry)
         runners[name] = runner
         try:
