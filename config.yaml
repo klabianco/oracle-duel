@@ -25,6 +25,7 @@ scanner:
   exclude_title_patterns: ["mention", "tweet", "say ", "says ", "post about"]
   exclude_categories: ["exotics", "mentions", "social"]
   max_per_event: 2
+  max_per_series: 3      # same ladder relists per close time (SOL today + SOL tomorrow); cap the underlying
   max_per_category: 10   # crypto price ladders dominate fast-closing supply; keep the mix broad
 
 research:

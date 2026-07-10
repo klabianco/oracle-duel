@@ -83,6 +83,22 @@ def test_per_category_cap_keeps_mix_broad():
     assert crypto_days == {(NOW + timedelta(hours=12)).date()}
 
 
+def test_per_series_cap_stops_relisted_ladders():
+    # the same price ladder relists as a fresh event per close time; without a
+    # series cap, SOL-today + SOL-tomorrow strikes stack past the event cap
+    sol = []
+    for day in range(3):                      # three close times of one ladder
+        for strike in range(2):               # two strikes each (event cap ok)
+            m = _market(day * 10 + strike, NOW + timedelta(hours=18 + day))
+            m["event_ticker"] = f"KXSOL-26JUL{9 + day}17"
+            sol.append(m)
+    other = [_market(100 + i, NOW + timedelta(hours=30)) for i in range(10)]
+    picked = scanner.scan(PageCappedClient(sol + other), CFG, now=NOW)
+    n_sol = sum(1 for m in picked if m["event_ticker"].startswith("KXSOL"))
+    assert n_sol == 3                         # default max_per_series
+    assert len(picked) == 13
+
+
 def test_horizon_bounds_still_respected():
     inside_6h = _market(1, NOW + timedelta(hours=3))          # too soon
     beyond_max = _market(2, NOW + timedelta(days=20))         # too far

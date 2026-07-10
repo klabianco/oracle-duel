@@ -69,19 +69,26 @@ def scan(client, cfg: dict, now: datetime = None) -> list[dict]:
     picked = [m for m in picked if m.get("category") not in exclude_cats]
 
     # diversity: at most N markets per underlying event (one concert setlist or
-    # esports match can't consume the day's list) and per category (crypto price
+    # esports match can't consume the day's list), per series (the same price
+    # ladder relists as a fresh event at every close time, so SOL-5pm-today +
+    # SOL-5pm-tomorrow stack past the event cap), and per category (crypto
     # ladders dominate the fast-closing supply and are near-random-walk noise)
     per_event_cap = sc.get("max_per_event", 2)
+    per_series_cap = sc.get("max_per_series", 3)
     per_cat_cap = sc.get("max_per_category")
-    by_event, by_cat, final = {}, {}, []
+    by_event, by_series, by_cat, final = {}, {}, {}, []
     for m in picked:
         ev = m.get("event_ticker") or m["market_id"]
+        series = m.get("series_ticker") or ev.split("-")[0]
         cat = m.get("category") or "uncategorized"
         if by_event.get(ev, 0) >= per_event_cap:
+            continue
+        if per_series_cap and by_series.get(series, 0) >= per_series_cap:
             continue
         if per_cat_cap and by_cat.get(cat, 0) >= per_cat_cap:
             continue
         by_event[ev] = by_event.get(ev, 0) + 1
+        by_series[series] = by_series.get(series, 0) + 1
         by_cat[cat] = by_cat.get(cat, 0) + 1
         final.append(m)
     return final[: sc["target_markets"]]
