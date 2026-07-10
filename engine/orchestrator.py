@@ -258,6 +258,7 @@ def cycle(cfg):
             "own_positions": telemetry.positions_by_market(name),
             "other_positions": other_positions,
             "orderbook_fn": client.get_orderbook,
+            "live": bool(cfg.get("live")),
         }
         decision = risk.evaluate(name, all_forecasts[name], ctx)
         if decision.halt:

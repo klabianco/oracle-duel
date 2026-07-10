@@ -156,8 +156,11 @@ def evaluate(agent: str, forecasts: list[dict], ctx: dict) -> Decision:
             d.rejections.append((mid, "already holds a position in this market"))
             continue
 
+        # Wash-trade prevention: only meaningful when real orders reach the
+        # exchange. In paper mode the guard would censor exactly the markets
+        # where the agents disagree — the experiment's best head-to-head data.
         other = ctx.get("other_positions", {}).get(mid)
-        if other and other != side:
+        if ctx.get("live") and other and other != side:
             d.rejections.append((mid, "self-match guard: other agent is on the opposite side"))
             continue
 

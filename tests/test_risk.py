@@ -91,11 +91,19 @@ def test_max_three_positions_per_day():
     assert len(d.orders) == 3
 
 
-def test_self_match_guard():
-    ctx = base_ctx(other_positions={"M1": "no"})
+def test_self_match_guard_live_only():
+    # live: opposite sides from the same owner would wash-trade on the exchange
+    ctx = base_ctx(other_positions={"M1": "no"}, live=True)
     d = risk.evaluate("a", [forecast(prob=0.85, yes_ask=0.55)], ctx)
     assert d.orders == []
     assert any("self-match" in r for _, r in d.rejections)
+
+
+def test_self_match_guard_off_in_paper_mode():
+    # paper: no exchange, and disagreements are the experiment's best data
+    ctx = base_ctx(other_positions={"M1": "no"}, live=False)
+    d = risk.evaluate("a", [forecast(prob=0.85, yes_ask=0.55)], ctx)
+    assert len(d.orders) == 1
 
 
 def test_liquidity_filter():
