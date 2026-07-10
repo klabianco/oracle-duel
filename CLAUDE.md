@@ -104,6 +104,18 @@ walk noise that would bias Δbrier toward KILL. Consequence: the experiment now
 tests short-horizon markets (mostly ≤2 days to close); expect n=300 around
 mid-July 2026.
 
+NOTE 2026-07-10 (owner-approved): four ops fixes, metrics/thresholds untouched.
+(1) risk.py self-match guard now fires only when `live: true` (owner signed off
+on the immutable-layer edit): in paper mode it censored the second agent's bet
+whenever the first had taken the opposite side — exactly the head-to-head
+disagreements the experiment wants. (2) Agent run order now rotates by date
+parity so shared-quota failures (e.g. the 7/9 Brave outage that blinded gpt)
+don't always hit the same agent. (3) Sampling frame: scanner adds
+max_per_series: 3 — the same price ladder relists per close time, so SOL-today
++ SOL-tomorrow strikes stacked past the per-event cap. (4) New evening
+settle-only pass (launchd com.oracleduel.settle, 7pm) grades same-day closes
+the same evening; the morning cycle previously left them for the next day.
+
 ## Commands
 
 ```bash
@@ -111,6 +123,7 @@ python -m engine.orchestrator cycle        # daily (cron); reads .env
 python -m engine.orchestrator status       # one line per agent
 python -m engine.orchestrator postmortem   # close completed rounds manually
 python -m engine.orchestrator resume       # clear circuit-breaker halts (human review)
+python -m engine.orchestrator settle       # settle-only pass (launchd runs it 7pm)
 python -m engine.orchestrator dashboard    # writes state/dashboard.html
 ORACLE_MOCK=1 ... fast-forward N           # advance mock clock
 pytest                                     # unit tests (risk, guard, scorer, postmortem)
