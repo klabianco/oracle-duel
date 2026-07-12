@@ -6,7 +6,7 @@
     <string>com.oracleduel.daily</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/kevinl/projects/bet/bin/daily.sh</string>
+        <string>/path/to/bet/bin/daily.sh</string>
     </array>
     <key>StartCalendarInterval</key>
     <dict>
@@ -16,8 +16,8 @@
         <integer>0</integer>
     </dict>
     <key>StandardOutPath</key>
-    <string>/Users/kevinl/projects/bet/logs/launchd.log</string>
+    <string>/path/to/bet/logs/launchd.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/kevinl/projects/bet/logs/launchd.log</string>
+    <string>/path/to/bet/logs/launchd.log</string>
 </dict>
 </plist>

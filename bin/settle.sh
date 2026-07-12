@@ -3,7 +3,7 @@
 # settles trades that finalized after the morning cycle, so same-day bets hit
 # the wallet the same evening. Read-mostly and idempotent: score_resolutions
 # only touches still-unresolved rows, so extra runs are harmless.
-cd /Users/kevinl/projects/bet || exit 1
+cd "$(dirname "$0")/.." || exit 1
 set -a
 . ./.env
 set +a

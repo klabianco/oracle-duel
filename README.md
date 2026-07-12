@@ -5,6 +5,17 @@ Each maintains a 500-word strategy prompt it rewrites after every graded round.
 Learning signal comes from **forecasts** (all Brier-scored); only the top 2–3 edges become
 small real-money bets, sized by an immutable risk engine.
 
+> **Disclaimer:** This is a research experiment in LLM forecasting and calibration, not
+> betting advice or a trading product. It defaults to paper mode (`live: false`) and its
+> pre-registered go/no-go gate (`engine/gates.py`, locked 2026-07-05 — see CLAUDE.md) exists
+> precisely because the null hypothesis is that this does *not* beat the market. Nothing
+> here is financial advice; if you run it with `live: true`, that's on you.
+>
+> **A note on "immutable":** `engine/risk.py` being immutable is a *local runtime
+> convention* (chmod 444 + the agents having no write path to it), enforced in this
+> deployment. A fork can of course change anything; forks' behavior says nothing about
+> this experiment.
+
 ## Setup
 
 ```bash
@@ -67,3 +78,8 @@ N−1, it auto-reverts.
 - alerts: set `NTFY_TOPIC` for push notifications; everything also lands in `logs/alerts.log`
 - raw data: `state/telemetry.db` (forecasts, trades, prompt_versions, postmortems,
   token_spend, incidents)
+
+## License
+
+MIT — see [LICENSE](LICENSE). The telemetry data (forecasts, outcomes, reasoning traces)
+is not in this repo; a full export is planned alongside the experiment write-up.
