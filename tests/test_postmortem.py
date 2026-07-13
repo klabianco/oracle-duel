@@ -144,3 +144,15 @@ def test_unchanged_prompt_round_never_auto_reverts(tmp_path):
     # to the historically worse v1 text
     assert out["action"] == "mutated"
     assert "Text A" not in runner.prompt_path.read_text()
+
+
+def test_rearm_high_water_lowers_only(tmp_path):
+    from engine.telemetry import Telemetry
+    tel = Telemetry(tmp_path / "t.db")
+    tel.ensure_agent("a", 100.0)
+    # drawdown reviewed: high-water re-arms at current equity
+    tel.rearm_high_water("a", 83.16)
+    assert abs(tel.agent_state("a")["high_water"] - 83.16) < 1e-9
+    # future gains raise it again via the normal MAX() path
+    tel.adjust_bankroll("a", 20.0)
+    assert tel.agent_state("a")["high_water"] >= 120.0 - 1e-9
