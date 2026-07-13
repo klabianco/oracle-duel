@@ -126,6 +126,19 @@ matched-agent coverage plus repeat/series clustering so the known pre-fix July 6
 asymmetry and non-independent historical rows remain visible rather than being
 silently excluded after outcomes arrived.
 
+NOTE 2026-07-12 (owner-approved): two ops fixes, gate metrics/thresholds and
+risk.py untouched. (1) Scalar settlements: Kalshi resolved the rained-out KBO
+game markets "to a fair price" (result='scalar', e.g. KTW $0.89/KIW $0.11) per
+their rules_secondary; the scorer only understood yes/no, so those trades sat
+open and the forecasts never resolved. Now: trades settle at the scalar value
+per side; forecast rows are VOIDED (resolved=2 + void_reason) — a scalar
+outcome cannot be Brier-scored, so voided rows are excluded from all Brier/
+gate queries but preserved in telemetry. Applied retroactively to the two KBO
+rows. (2) Agents now see rules_secondary ("Settlement fine print") in the
+market block — the KBO arb was priced without ever seeing the fair-price
+clause. Symmetric for both agents; forecasting inputs only, no metric change.
+Same day: repo went public (github.com/klabianco/oracle-duel, MIT).
+
 ## Commands
 
 ```bash

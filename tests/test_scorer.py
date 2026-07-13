@@ -6,10 +6,13 @@ from engine.telemetry import Telemetry
 
 class FakeClient:
     def __init__(self, outcomes):
-        self.outcomes = outcomes  # market_id -> 'yes'|'no'|None
+        # market_id -> 'yes'|'no'|None, or a full market dict for special cases
+        self.outcomes = outcomes
 
     def get_market(self, mid):
         res = self.outcomes.get(mid)
+        if isinstance(res, dict):
+            return {"market_id": mid, **res}
         return {"market_id": mid, "status": "settled" if res else "active",
                 "result": res or ""}
 
@@ -59,3 +62,35 @@ def test_losing_trade(tel):
     trade = dict(tel.conn.execute("SELECT * FROM trades").fetchone())
     assert abs(trade["pnl"] - (-2.09)) < 1e-9
     assert abs(tel.agent_state("a")["bankroll"] - (100 - 2.09)) < 1e-9
+
+
+def test_scalar_settlement_voids_forecast_and_settles_trades(tel):
+    # Kalshi "fair price" settlement (e.g. cancelled game): result='scalar'
+    scalar_market = {"status": "finalized", "result": "scalar",
+                     "settlement_value": 0.89}
+    tel.record_forecast(cycle_date="d", agent="a", prompt_version=1, market_id="M4",
+                        market_title="t", category="sports", prob=0.08,
+                        market_price=0.59, edge_net=0.1, confidence_notes="")
+    # NO trade: 7 contracts at 0.45, fees 0.10 -> each NO pays 1-0.89=0.11
+    tel.record_trade(cycle_date="d", agent="a", market_id="M4", side="no",
+                     contracts=7, price=0.45, fees=0.10, status="open",
+                     paper=1, order_id=None)
+    tel.adjust_bankroll("a", -(7 * 0.45 + 0.10))
+
+    stats = scorer.score_resolutions(FakeClient({"M4": scalar_market}), tel)
+    assert stats["forecasts_voided"] == 1
+    assert stats["forecasts_resolved"] == 0
+    assert stats["trades_settled"] == 1
+
+    row = dict(tel.conn.execute("SELECT * FROM forecasts").fetchone())
+    assert row["resolved"] == 2  # voided: excluded from resolved=1 Brier queries
+    assert row["brier"] is None
+    assert "scalar" in row["void_reason"]
+
+    trade = dict(tel.conn.execute("SELECT * FROM trades").fetchone())
+    # pnl = 7*(0.11-0.45) - 0.10 = -2.48
+    assert abs(trade["pnl"] - (-2.48)) < 1e-9
+    # bankroll: 100 - 3.25 (entry) + 7*0.11 (payout) = 97.52
+    assert abs(tel.agent_state("a")["bankroll"] - 97.52) < 1e-9
+    # voided rows never re-enter the unresolved queue
+    assert tel.unresolved_forecasts() == []

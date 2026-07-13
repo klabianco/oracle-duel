@@ -59,8 +59,8 @@ touch state/STOP    # blocks all order submission immediately; forecasting conti
 Quarter-Kelly capped at 5% of bankroll · max 3 new positions/agent/day · 10% daily loss cap
 · 15% drawdown circuit breaker (halts until human review) · min 3¢ edge net of Kalshi fees
 · 2¢ slippage liquidity filter · self-match guard · STOP file. In production:
-`chmod 444 engine/risk.py`. To un-halt an agent after review:
-`sqlite3 state/telemetry.db "UPDATE agent_state SET halted=0 WHERE agent='claude'"`.
+`chmod 444 engine/risk.py`. To un-halt an agent after human review:
+`python -m engine.orchestrator resume`.
 
 ## Prompt evolution
 

@@ -129,11 +129,13 @@ class AgentRunner:
 
     def _market_block(self, market: dict) -> str:
         mid_price = self._market_mid(market)
+        fine_print = market.get("rules_secondary") or ""
         return (f"Market ID: {market['market_id']}\n"
                 f"Question: {market['title']}\n"
                 f"Category: {market['category']}\n"
                 f"Resolution rules: {market.get('rules','')}\n"
-                f"Closes: {market['close_time']}\n"
+                + (f"Settlement fine print: {fine_print}\n" if fine_print else "")
+                + f"Closes: {market['close_time']}\n"
                 f"Current YES price (mid): {mid_price}\n"
                 f"YES ask: {market['yes_ask']}  NO ask: {market['no_ask']}\n")
 

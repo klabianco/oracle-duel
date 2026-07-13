@@ -216,8 +216,10 @@ class KalshiClient:
             "close_time": m.get("close_time"),
             "expected_expiration_time": m.get("expected_expiration_time"),
             "status": m.get("status"),
-            "result": m.get("result"),  # 'yes' | 'no' | '' when settled
+            "result": m.get("result"),  # 'yes' | 'no' | 'scalar' | '' when settled
+            "settlement_value": _dollars(m.get("settlement_value_dollars")),
             "rules": (m.get("rules_primary") or "")[:1500],
+            "rules_secondary": (m.get("rules_secondary") or "")[:1500],
         }
 
 

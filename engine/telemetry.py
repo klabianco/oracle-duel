@@ -122,6 +122,7 @@ FORECAST_COLUMNS = {
     "expected_expiration_time": "TEXT",
     "event_ticker": "TEXT",
     "series_ticker": "TEXT",
+    "void_reason": "TEXT",
 }
 
 
@@ -235,6 +236,16 @@ class Telemetry:
         self.conn.execute(
             "UPDATE forecasts SET resolved=1, outcome=?, brier=?, resolved_at=? WHERE id=?",
             (outcome, brier, _now(), forecast_id),
+        )
+        self.conn.commit()
+
+    def void_forecast(self, forecast_id: int, reason: str):
+        """Non-binary settlement (e.g. Kalshi 'fair price' scalar): resolved=2
+        keeps the row out of both the unresolved queue (resolved=0) and every
+        Brier/gate query (resolved=1) without deleting history."""
+        self.conn.execute(
+            "UPDATE forecasts SET resolved=2, void_reason=?, resolved_at=? WHERE id=?",
+            (reason, _now(), forecast_id),
         )
         self.conn.commit()
 
