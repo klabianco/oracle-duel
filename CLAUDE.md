@@ -126,6 +126,13 @@ matched-agent coverage plus repeat/series clustering so the known pre-fix July 6
 asymmetry and non-independent historical rows remain visible rather than being
 silently excluded after outcomes arrived.
 
+NOTE 2026-07-13 (owner-approved): round_complete now counts calendar days
+instead of elapsed seconds — a prompt deployed later in the day than the
+cycle's postmortem step could never satisfy the 7-day check at that step and
+always slipped a full day (claude missed round-1 close by 44 minutes; gpt's
+v2, deployed 15:08:11, would have raced the same check every week). Gate
+metrics/thresholds and risk.py untouched.
+
 NOTE 2026-07-12 (owner-approved): two ops fixes, gate metrics/thresholds and
 risk.py untouched. (1) Scalar settlements: Kalshi resolved the rained-out KBO
 game markets "to a fair price" (result='scalar', e.g. KTW $0.89/KIW $0.11) per

@@ -66,7 +66,11 @@ def round_complete(telemetry, agent: str, cfg: dict, now: datetime = None) -> bo
         return False
     now = now or datetime.now(timezone.utc)
     deployed = datetime.fromisoformat(cur["deployed_at"])
-    days = (now - deployed).total_seconds() / 86400
+    # Calendar days, not elapsed seconds: rounds can only close during the
+    # daily cycle, so a deploy stamped later in the day than the cycle's
+    # postmortem step would otherwise always miss the check by minutes and
+    # slip a full day (claude missed round 1 by 44 minutes this way).
+    days = (now.date() - deployed.date()).days
     resolved = telemetry.resolved_count_for_version(agent, cur["version"])
     r = cfg["round"]
     return days >= r["min_days"] and resolved >= r["min_resolved_forecasts"]
