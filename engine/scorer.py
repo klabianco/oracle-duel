@@ -15,9 +15,13 @@ def _market_settlement(market: dict):
         return ("binary", 1)
     if result == "no":
         return ("binary", 0)
-    value = market.get("settlement_value")
-    if value is not None:
-        return ("scalar", float(value))
+    # Require the explicit scalar result: a settled market can transiently
+    # report result='' (possibly with a default settlement_value of 0), and
+    # voiding/settling on that would be irreversible.
+    if result == "scalar":
+        value = market.get("settlement_value")
+        if value is not None:
+            return ("scalar", float(value))
     return None
 
 

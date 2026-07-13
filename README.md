@@ -42,10 +42,28 @@ python -m engine.orchestrator cycle
 **Phase 1+ — live:** set `live: true` in config.yaml (or `ORACLE_LIVE=1`). Orders are
 limit orders at the evaluated ask, capped by the risk engine.
 
-## Cron (7am PT daily)
+## Scheduling
+
+**macOS (launchd — what this repo uses):** two jobs, a 7am forecast cycle and a
+7pm settle-only pass. Templates are in `bin/`; replace `/path/to/bet` with your
+checkout path, then:
+
+```bash
+sed -i '' "s|/path/to/bet|$PWD|g" bin/com.oracleduel.daily.plist bin/com.oracleduel.settle.plist
+cp bin/com.oracleduel.*.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.oracleduel.daily.plist
+launchctl load ~/Library/LaunchAgents/com.oracleduel.settle.plist
+```
+
+`bin/daily.sh` is idempotent (a `state/.last_cycle` stamp prevents double runs,
+so launchd's catch-up firing after wake is safe). Both scripts locate the repo
+from their own path and read `.env` themselves.
+
+**Linux (cron):**
 
 ```cron
-0 7 * * * cd /path/to/bet && .venv/bin/python -m engine.orchestrator cycle >> logs/cron.log 2>&1
+0 7 * * * /path/to/bet/bin/daily.sh
+0 19 * * * /path/to/bet/bin/settle.sh
 ```
 
 ## Kill switch

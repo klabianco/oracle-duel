@@ -55,12 +55,18 @@ over {brier_all[1]} resolved forecasts</p>
     ensemble_html = ""
     if len(agents) >= 2:
         a0, a1 = agents[0], agents[1]
+        # Same matched-pair join discipline as audit_metrics.matched_head_to_head:
+        # outcomes must agree, and each agent's own benchmark snapshot is used
+        # (they are refreshed separately, so neither snapshot alone is "the market").
         pairs = telemetry.conn.execute(
-            "SELECT c.prob p0, g.prob p1, c.outcome o, c.market_price mp "
+            "SELECT c.prob p0, g.prob p1, c.outcome o, "
+            "c.market_price mp0, g.market_price mp1 "
             "FROM forecasts c JOIN forecasts g "
             "ON c.market_id=g.market_id AND c.cycle_date=g.cycle_date "
             "WHERE c.agent=? AND g.agent=? AND c.resolved=1 AND g.resolved=1 "
-            "AND c.market_price IS NOT NULL", (a0, a1)).fetchall()
+            "AND c.outcome=g.outcome "
+            "AND c.market_price IS NOT NULL AND g.market_price IS NOT NULL",
+            (a0, a1)).fetchall()
         if pairs:
             n = len(pairs)
             def _b(key):
@@ -71,7 +77,8 @@ over {brier_all[1]} resolved forecasts</p>
     {'forecaster': a0, 'brier': _b(lambda r: r['p0'])},
     {'forecaster': a1, 'brier': _b(lambda r: r['p1'])},
     {'forecaster': 'ensemble (mean)', 'brier': _b(lambda r: (r['p0'] + r['p1']) / 2)},
-    {'forecaster': 'market price', 'brier': _b(lambda r: r['mp'])},
+    {'forecaster': 'market price (mean of both snapshots)',
+     'brier': _b(lambda r: (r['mp0'] + r['mp1']) / 2)},
 ], ['forecaster', 'brier'])}
 <p><em>Errors cancel only if the agents fail differently — watch whether the
 ensemble drops below both agents after prompt rounds.</em></p>"""

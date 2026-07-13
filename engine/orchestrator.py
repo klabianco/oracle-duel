@@ -414,6 +414,7 @@ def _paid_cycle(cfg, telemetry, alerts, client, date, markets, stats):
     # 6) digest
     lines = [f"cycle {date}: {len(markets)} markets scanned, "
              f"{stats['forecasts_resolved']} forecasts resolved, "
+             f"{stats.get('forecasts_voided', 0)} voided (non-binary settlement), "
              f"{stats['trades_settled']} trades settled"]
     for name in agent_names:
         st = telemetry.agent_state(name)
@@ -499,13 +500,16 @@ def main():
         report = gates.report(telemetry, cfg)
         integrity = audit_metrics.report(telemetry, cfg)
         generate_dashboard(telemetry, cfg)
+        voided = stats.get("forecasts_voided", 0)
         print(f"settle: {stats['forecasts_resolved']} forecasts resolved, "
+              f"{voided} voided (non-binary settlement), "
               f"{stats['trades_settled']} trades settled, pnl {stats['pnl']}")
         print(report)
         print(integrity)
-        if stats["forecasts_resolved"] or stats["trades_settled"]:
+        if stats["forecasts_resolved"] or stats["trades_settled"] or voided:
             Alerts(cfg).send(
                 f"Evening settlement: {stats['forecasts_resolved']} forecasts resolved, "
+                f"{voided} voided (non-binary settlement), "
                 f"{stats['trades_settled']} trades settled.\n\n{report}\n\n{integrity}",
                 title="oracle-duel evening settlement",
             )

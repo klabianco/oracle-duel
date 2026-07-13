@@ -94,3 +94,24 @@ def test_scalar_settlement_voids_forecast_and_settles_trades(tel):
     assert abs(tel.agent_state("a")["bankroll"] - 97.52) < 1e-9
     # voided rows never re-enter the unresolved queue
     assert tel.unresolved_forecasts() == []
+
+
+def test_settled_with_empty_result_is_not_scalar(tel):
+    # A settled market can transiently report result='' — possibly with a
+    # default settlement_value of 0. It must stay unresolved, NOT be voided
+    # or settled at $0 (both are irreversible).
+    transient = {"status": "finalized", "result": "", "settlement_value": 0.0}
+    tel.record_forecast(cycle_date="d", agent="a", prompt_version=1, market_id="M5",
+                        market_title="t", category="sports", prob=0.6,
+                        market_price=0.5, edge_net=0.1, confidence_notes="")
+    tel.record_trade(cycle_date="d", agent="a", market_id="M5", side="yes",
+                     contracts=10, price=0.50, fees=0.10, status="open",
+                     paper=1, order_id=None)
+
+    stats = scorer.score_resolutions(FakeClient({"M5": transient}), tel)
+    assert stats["forecasts_resolved"] == 0
+    assert stats["forecasts_voided"] == 0
+    assert stats["trades_settled"] == 0
+    assert len(tel.unresolved_forecasts()) == 1
+    trade = dict(tel.conn.execute("SELECT * FROM trades").fetchone())
+    assert trade["status"] == "open" and trade["pnl"] is None

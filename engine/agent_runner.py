@@ -129,7 +129,10 @@ class AgentRunner:
 
     def _market_block(self, market: dict) -> str:
         mid_price = self._market_mid(market)
-        fine_print = market.get("rules_secondary") or ""
+        # Exchange-authored text is still untrusted input: run the fine print
+        # through the same injection guard as research output before it enters
+        # the (deliberately clean) estimate context.
+        fine_print = " ".join(sanitize_summary(market.get("rules_secondary") or "").split())
         return (f"Market ID: {market['market_id']}\n"
                 f"Question: {market['title']}\n"
                 f"Category: {market['category']}\n"

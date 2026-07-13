@@ -198,11 +198,13 @@ class KalshiClient:
                      ("yes_bid", "yes_ask", "no_bid", "no_ask", "last_price")}
             volume = float(m.get("volume_fp") or 0)
             open_interest = float(m.get("open_interest_fp") or 0)
+            settlement_value = _dollars(m.get("settlement_value_dollars"))
         else:  # legacy: integer cents
             price = {k: _cents_to_dollars(m.get(k)) for k in
                      ("yes_bid", "yes_ask", "no_bid", "no_ask", "last_price")}
             volume = m.get("volume") or 0
             open_interest = m.get("open_interest") or 0
+            settlement_value = _cents_to_dollars(m.get("settlement_value"))
         return {
             "market_id": m.get("ticker"),
             "event_ticker": m.get("event_ticker"),
@@ -217,7 +219,7 @@ class KalshiClient:
             "expected_expiration_time": m.get("expected_expiration_time"),
             "status": m.get("status"),
             "result": m.get("result"),  # 'yes' | 'no' | 'scalar' | '' when settled
-            "settlement_value": _dollars(m.get("settlement_value_dollars")),
+            "settlement_value": settlement_value,
             "rules": (m.get("rules_primary") or "")[:1500],
             "rules_secondary": (m.get("rules_secondary") or "")[:1500],
         }
