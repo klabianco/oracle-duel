@@ -126,6 +126,15 @@ matched-agent coverage plus repeat/series clustering so the known pre-fix July 6
 asymmetry and non-independent historical rows remain visible rather than being
 silently excluded after outcomes arrived.
 
+NOTE 2026-07-13 (owner-approved): `orchestrator resume` now re-arms the
+circuit breaker at current equity when clearing a halt (risk.py, its 15%
+threshold, and its formula untouched — the change is what "human review"
+means: the loss is seen and accepted, so the next halt requires a further
+15% drawdown from the reviewed level). Previously the stale high-water
+re-fired the breaker every cycle until the drawdown was won back, which in
+paper mode permanently benched claude. Applied same day: claude un-halted,
+breaker re-armed at $83.16.
+
 NOTE 2026-07-13 (owner-approved): round_complete now counts calendar days
 instead of elapsed seconds — a prompt deployed later in the day than the
 cycle's postmortem step could never satisfy the 7-day check at that step and

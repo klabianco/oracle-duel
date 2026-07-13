@@ -191,6 +191,16 @@ class Telemetry:
             )
             self.conn.commit()
 
+    def rearm_high_water(self, agent: str, equity: float):
+        """Lower the high-water mark to current equity after a human-reviewed
+        halt clear, so the circuit breaker re-arms for a FURTHER drawdown
+        instead of re-firing every cycle on the already-reviewed loss."""
+        self.conn.execute(
+            "UPDATE agent_state SET high_water = ? WHERE agent=?",
+            (equity, agent),
+        )
+        self.conn.commit()
+
     def adjust_bankroll(self, agent: str, delta: float):
         self.conn.execute(
             "UPDATE agent_state SET bankroll = bankroll + ?, "

@@ -459,16 +459,29 @@ def status(cfg):
 
 
 def resume(cfg):
-    """Clear circuit-breaker halts. This IS the 'human review' the halt asks for."""
+    """Clear circuit-breaker halts. This IS the 'human review' the halt asks for.
+
+    Clearing also re-arms the breaker at current equity (owner-approved
+    2026-07-13): review means the loss is seen and accepted, so the next halt
+    requires a FURTHER 15% drawdown from here. Without this, the stale
+    high-water re-fires the breaker every cycle until the agent wins the
+    drawdown back, making 'human review' meaningless."""
     telemetry = Telemetry(DB_PATH)
     for name in cfg["agents"]:
         st = telemetry.agent_state(name)
         if not st or not st["halted"]:
             print(f"{name}: not halted")
             continue
+        equity = st["bankroll"] + telemetry.open_stake(name)
         telemetry.set_halted(name, False)
-        telemetry.incident("halt_cleared", name, st["halted_reason"])
-        print(f"{name}: halt cleared (was: {st['halted_reason']})")
+        if equity < st["high_water"]:
+            telemetry.rearm_high_water(name, equity)
+        telemetry.incident("halt_cleared", name, {
+            "was": st["halted_reason"],
+            "high_water_rearmed": round(min(equity, st["high_water"]), 2),
+        })
+        print(f"{name}: halt cleared, breaker re-armed at equity ${equity:.2f} "
+              f"(was: {st['halted_reason']})")
 
 
 def main():
