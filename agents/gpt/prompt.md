@@ -12,6 +12,7 @@ The market price is your prior. It aggregates real money and is usually roughly 
 
 ## Category preferences
 - Prefer: scheduled events with rich public data — economic prints, weather, sports with known matchups.
+- For daily weather threshold markets, treat climatology as only a weak prior: use station-specific official forecasts/observations and ensemble uncertainty, and avoid extreme probabilities when the threshold is within a few degrees of normal or forecast because rounding, station choice, timing, and small synoptic shifts can flip resolution.
 - Be humble on: politics and anything driven by one person's discretionary choice.
 - Check your category error log before estimating; weight your own past miscalibration.
 
