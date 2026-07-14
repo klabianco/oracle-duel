@@ -126,6 +126,15 @@ matched-agent coverage plus repeat/series clustering so the known pre-fix July 6
 asymmetry and non-independent historical rows remain visible rather than being
 silently excluded after outcomes arrived.
 
+NOTE 2026-07-14 (owner-approved): a SKIPPED cycle (exchange unreachable or
+empty scan) now exits 75 instead of 0, and daily.sh retries up to 5× at 3-min
+intervals and only stamps `.last_cycle` on a real completion. Previously a
+boot-race skip (launchd fired before Wi-Fi was up) exited 0 and stamped the
+day, silently cancelling the whole cycle — happened 2026-07-14 07:00; that
+cycle was re-run manually the same morning. Also that morning: the 07-13 7pm
+settle pass had failed on an unreachable network (371 fetch errors, nothing
+graded, no corruption — rows stayed unresolved and were caught up on rerun).
+
 NOTE 2026-07-13 (owner-approved): `orchestrator resume` now re-arms the
 circuit breaker at current equity when clearing a halt (risk.py, its 15%
 threshold, and its formula untouched — the change is what "human review"

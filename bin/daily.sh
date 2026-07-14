@@ -19,5 +19,19 @@ set -a
 . ./.env
 set +a
 export ORACLE_CYCLE_DATE="$TODAY"
-.venv/bin/python -m engine.orchestrator cycle >> logs/cron.log 2>&1 \
-    && echo "$TODAY" > state/.last_cycle
+# Exit 75 = transient skip (network not up yet at boot, exchange closed or
+# unreachable, empty scan). Retry a few times and NEVER stamp the day for a
+# skip — only a genuinely completed cycle may claim the date.
+attempt=0
+while :; do
+    .venv/bin/python -m engine.orchestrator cycle >> logs/cron.log 2>&1
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+        echo "$TODAY" > state/.last_cycle
+        break
+    fi
+    [ "$rc" -ne 75 ] && exit "$rc"
+    attempt=$((attempt+1))
+    [ "$attempt" -ge 5 ] && exit 75
+    sleep 180
+done

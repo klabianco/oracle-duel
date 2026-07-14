@@ -286,7 +286,10 @@ def cycle(cfg):
     if not client.exchange_ok():
         telemetry.incident("exchange_down", None, "skipping cycle, never queueing stale orders")
         alerts.send("Kalshi API down/closed — cycle skipped")
-        return
+        # EX_TEMPFAIL: a SKIPPED cycle must not read as success, or wrappers
+        # stamp the day as done (bit us 2026-07-14: launchd fired at boot
+        # before the network was up and the whole day was silently skipped).
+        return 75
 
     # 1) settle yesterday first so bankrolls and error logs are current
     stats = scorer.score_resolutions(client, telemetry)
@@ -316,7 +319,7 @@ def cycle(cfg):
     markets = screened
     if not markets:
         alerts.send("scanner found no eligible markets — cycle ends")
-        return
+        return 75  # transient skip: leave the day unstamped so a retry can run
 
     # Claim the date only now, right before paid inference. Settle, scan and
     # pre-screen are idempotent and safe to retry after a transient failure;
@@ -494,7 +497,7 @@ def main():
     cfg = load_config(args.config)
 
     if args.command == "cycle":
-        cycle(cfg)
+        sys.exit(cycle(cfg))  # None -> 0; 75 -> transient skip, day not done
     elif args.command == "status":
         status(cfg)
     elif args.command == "dashboard":
